@@ -82,7 +82,7 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
       targets.push(await auditTarget(fn, verified.info, verified.source, verified.sourceHash, workers, options));
     }
     return {
-      schema: "ls-crosscheck.report/v1",
+      schema: "lemmascript-crosscheck.report/v1",
       provenance,
       targets,
     };
@@ -370,7 +370,7 @@ async function issueReport(
     ...(observed.runtimeError === undefined ? {} : { runtimeError: observed.runtimeError }),
   };
   if (options.saveCases) await saveCase({
-    schema: "ls-crosscheck.case/v1", id, source,
+    schema: "lemmascript-crosscheck.case/v1", id, source,
     sourceSha256: sourceHash, target: fn.name, runtimeTarget, category: observed.category, args,
     ...(runtimeArgs === undefined ? {} : { runtimeArgs }),
     ...(observed.presencePath === undefined ? {} : { presencePath: observed.presencePath }),
@@ -403,7 +403,7 @@ async function domainIssueReport(
     formalDisplay: formatFormalValue(witness.failure.formalValue),
   };
   if (options.saveCases) await saveCase({
-    schema: "ls-crosscheck.case/v1", id, source,
+    schema: "lemmascript-crosscheck.case/v1", id, source,
     sourceSha256: sourceHash, target: fn.name, runtimeTarget, category: "input-domain", args,
   });
   return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };

@@ -1,5 +1,5 @@
 {
-  "name": "ls-crosscheck",
+  "name": "lemmascript-crosscheck",
   "version": "0.1.0",
   "description": "Counterexample-driven runtime transfer checking for LemmaScript",
   "type": "module",
@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "bin": {
-    "ls-crosscheck": "dist/src/cli.js"
+    "lemmascript-crosscheck": "dist/src/cli.js"
   },
   "files": [
     "dist",

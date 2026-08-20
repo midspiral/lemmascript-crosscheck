@@ -57,7 +57,7 @@ export interface Provenance {
 }
 
 export interface AuditReport {
-  schema: "ls-crosscheck.report/v1";
+  schema: "lemmascript-crosscheck.report/v1";
   provenance?: Provenance;
   targets: TargetReport[];
 }

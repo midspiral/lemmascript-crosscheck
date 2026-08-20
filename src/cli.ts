@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   try { parsed = parseArgs(process.argv.slice(2)); }
   catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error("Run ls-crosscheck --help for usage.");
+    console.error("Run lemmascript-crosscheck --help for usage.");
     process.exitCode = 2;
     return;
   }
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   const source = path.resolve(parsed.source ?? replay?.source ?? "");
   if (!source || source === path.resolve("")) {
     console.error("A LemmaScript source file is required.");
-    console.error("Run ls-crosscheck --help for usage.");
+    console.error("Run lemmascript-crosscheck --help for usage.");
     process.exitCode = 2;
     return;
   }
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     clearProgress();
     const message = conciseCommandError(error);
     if (parsed.json) {
-      process.stdout.write(`${JSON.stringify({ schema: "ls-crosscheck.report/v1", targets: [{ target: path.basename(source), conclusion: "not-checked", evidence: "tool-failure", reason: message }] }, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify({ schema: "lemmascript-crosscheck.report/v1", targets: [{ target: path.basename(source), conclusion: "not-checked", evidence: "tool-failure", reason: message }] }, null, 2)}\n`);
     } else {
       process.stdout.write(`${renderFatal(path.basename(source), message)}\n`);
     }
@@ -149,7 +149,7 @@ function integer(name: string, value: string): number {
 }
 
 function help(): string {
-  return `ls-crosscheck ${VERSION}\n\nUsage:\n  ls-crosscheck <source.ts> [options]\n\nOptions:\n  --only <name>          Check one exported verified function\n  --runtime <module>     Execute a deployed module instead of the source\n  --entry A=B            Map formal target A to runtime export B\n  --cases <count>        Proof-valid executions per target (default: 100)\n  --seed <integer>       Deterministic generation seed (default: 17)\n  --timeout <ms>         Per-call worker deadline (default: 2000)\n  --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)\n  --replay <id>          Replay a saved counterexample\n  --details              Expand every target in a multi-target file\n  --json                 Emit the stable machine report\n  --help                  Show this help\n  --version               Show the version\n\nDevelopment checkout:\n  LEMMASCRIPT=../LemmaScript ls-crosscheck ../LemmaScript/examples/arraySum.ts\n`;
+  return `lemmascript-crosscheck ${VERSION}\n\nUsage:\n  lemmascript-crosscheck <source.ts> [options]\n\nOptions:\n  --only <name>          Check one exported verified function\n  --runtime <module>     Execute a deployed module instead of the source\n  --entry A=B            Map formal target A to runtime export B\n  --cases <count>        Proof-valid executions per target (default: 100)\n  --seed <integer>       Deterministic generation seed (default: 17)\n  --timeout <ms>         Per-call worker deadline (default: 2000)\n  --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)\n  --replay <id>          Replay a saved counterexample\n  --details              Expand every target in a multi-target file\n  --json                 Emit the stable machine report\n  --help                  Show this help\n  --version               Show the version\n\nDevelopment checkout:\n  LEMMASCRIPT=../LemmaScript lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts\n`;
 }
 
 void main();

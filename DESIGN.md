@@ -1,4 +1,4 @@
-# ls-crosscheck-elegant
+# lemmascript-crosscheck
 
 **Status:** proposal for review. This repository must contain no implementation
 until this document is accepted.
@@ -12,7 +12,7 @@ proof and the program.
 The ordinary interaction is:
 
 ```sh
-ls-crosscheck path/to/file.ts
+lemmascript-crosscheck path/to/file.ts
 ```
 
 There is no handwritten manifest, config file, oracle module, rejection class,
@@ -23,7 +23,7 @@ artifact selection, or target-role declaration in the normal workflow.
 ### One target
 
 ```text
-$ ls-crosscheck examples/arraySum.ts
+$ lemmascript-crosscheck examples/arraySum.ts
 
 arraySum: INCOMPATIBLE
 
@@ -50,7 +50,7 @@ available through `--explain` and `--json`, not printed by default.
 ### Several targets
 
 ```text
-$ ls-crosscheck examples/
+$ lemmascript-crosscheck examples/
 
 7 targets
 
@@ -188,14 +188,14 @@ audit**; it does not pretend to have checked a production bundle.
 A deployed artifact can be selected without a project manifest:
 
 ```sh
-ls-crosscheck src/search.ts --runtime dist/search.js
+lemmascript-crosscheck src/search.ts --runtime dist/search.js
 ```
 
 Targets map by the bundle's exported names. A renamed or wrapped production
 entry point is supplied directly:
 
 ```sh
-ls-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
+lemmascript-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
 ```
 
 If an export is missing or ambiguous, the target is `ERROR`. Crosscheck never
@@ -334,7 +334,7 @@ Default mode checks behavior on the proof domain. Optional boundary mode asks
 whether a public adapter enforces that domain:
 
 ```sh
-ls-crosscheck src/search.ts --runtime dist/api.js --boundary
+lemmascript-crosscheck src/search.ts --runtime dist/api.js --boundary
 ```
 
 Boundary behavior must be declared by LemmaScript source metadata or use a
@@ -469,7 +469,7 @@ by LemmaScript.
 
 The first releasable version satisfies all of these:
 
-- `ls-crosscheck file.ts` is the complete common workflow;
+- `lemmascript-crosscheck file.ts` is the complete common workflow;
 - no handwritten semantic manifest or oracle is needed;
 - no user-authored prose can produce a `PROVED` result;
 - exact integers, BigInt, and exact-real/binary64 comparison work;

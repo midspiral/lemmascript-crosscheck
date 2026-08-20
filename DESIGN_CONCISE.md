@@ -1,4 +1,4 @@
-# ls-crosscheck-elegant — concise design
+# lemmascript-crosscheck — concise design
 
 **Status:** review proposal; no implementation until the final decisions are
 accepted.
@@ -9,7 +9,7 @@ Run a LemmaScript source's verified functions under JavaScript semantics and
 explain the smallest concrete proof/program gap.
 
 ```sh
-ls-crosscheck path/to/file.ts
+lemmascript-crosscheck path/to/file.ts
 ```
 
 No handwritten manifest, config, oracle, or rejection class is required.
@@ -18,8 +18,8 @@ By default, exported verified targets form a **source-runtime audit**.
 Production code is explicit:
 
 ```sh
-ls-crosscheck src/search.ts --runtime dist/search.js
-ls-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
+lemmascript-crosscheck src/search.ts --runtime dist/search.js
+lemmascript-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
 ```
 
 ## Output

@@ -1,4 +1,4 @@
-# ls-crosscheck-elegant — user interface design
+# lemmascript-crosscheck — user interface design
 
 **Status:** proposal for review. This document defines the human-facing CLI.
 The semantic engine is specified in `DESIGN_OPERATIONAL.md`; this document
@@ -89,7 +89,7 @@ Resolve
   Use bigint, or prove that every accumulator remains a safe integer.
 
 Replay
-  ls-crosscheck examples/arraySum.ts --replay 7f31a2
+  lemmascript-crosscheck examples/arraySum.ts --replay 7f31a2
 
 Evidence: replayed counterexample · Dafny 4.11 model
 ```
@@ -140,7 +140,7 @@ Resolve
   Return a new array, or add the mutation to the formal effect model.
 
 Replay
-  ls-crosscheck examples/nestedPush.ts --replay 91bc02
+  lemmascript-crosscheck examples/nestedPush.ts --replay 91bc02
 
 Evidence: replayed counterexample
 ```
@@ -277,7 +277,7 @@ intended API.
 Every executable issue receives a stable issue ID and replay command:
 
 ```text
-ls-crosscheck source.ts --replay 7f31a2
+lemmascript-crosscheck source.ts --replay 7f31a2
 ```
 
 The ID is derived from target, semantic category, source site, and minimized
@@ -308,7 +308,7 @@ NO ISSUE     shiftWide      sampled 100 inputs
 NO ISSUE     low64          sampled 100 inputs
 NO ISSUE     floorDivision  exhaustive singleton domain
 
-Explain an issue: ls-crosscheck examples/ --explain arraySum/7f31a2
+Explain an issue: lemmascript-crosscheck examples/ --explain arraySum/7f31a2
 ```
 
 Rows contain conclusion, target, and one root-cause summary. If a target has

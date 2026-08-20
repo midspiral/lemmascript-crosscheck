@@ -20,7 +20,7 @@ function findPackageRoot(from: string): string {
   while (true) {
     if (existsSync(path.join(directory, "package.json")) && existsSync(path.join(directory, "node_modules"))) return directory;
     const parent = path.dirname(directory);
-    if (parent === directory) throw new Error("could not locate the ls-crosscheck package root");
+    if (parent === directory) throw new Error("could not locate the lemmascript-crosscheck package root");
     directory = parent;
   }
 }
@@ -36,9 +36,9 @@ export async function compileVerifiedDafny(
 
   const bignumber = createRequire(import.meta.url).resolve("bignumber.js");
   const key = createHash("sha256").update(text).update("\0").update(bignumber).digest("hex").slice(0, 20);
-  const cache = process.env.LS_CROSSCHECK_BUILD_CACHE
-    ? path.resolve(process.env.LS_CROSSCHECK_BUILD_CACHE)
-    : path.join(tmpdir(), "ls-crosscheck-build");
+  const cache = process.env.LEMMASCRIPT_CROSSCHECK_BUILD_CACHE
+    ? path.resolve(process.env.LEMMASCRIPT_CROSSCHECK_BUILD_CACHE)
+    : path.join(tmpdir(), "lemmascript-crosscheck-build");
   await mkdir(cache, { recursive: true });
   const modulePath = path.join(cache, `model-${key}.cjs`);
   if (existsSync(modulePath)) return { modulePath, artifactHash };

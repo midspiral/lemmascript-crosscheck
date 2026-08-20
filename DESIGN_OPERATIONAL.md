@@ -1,4 +1,4 @@
-# ls-crosscheck-elegant — operational design
+# lemmascript-crosscheck — operational design
 
 **Status:** implementation-facing proposal for review. It refines
 `DESIGN_CONCISE.md`; `DESIGN.md` retains the extended rationale. No code should
@@ -10,7 +10,7 @@ Crosscheck runs verified LemmaScript functions under JavaScript semantics and
 reports the smallest concrete explanation of any proof/runtime gap.
 
 ```sh
-ls-crosscheck path/to/file.ts
+lemmascript-crosscheck path/to/file.ts
 ```
 
 The common workflow requires no handwritten manifest, semantic config, oracle,
@@ -22,8 +22,8 @@ module under a recorded TypeScript loader, and the report calls this a
 **source-runtime audit**. Production code is explicit:
 
 ```sh
-ls-crosscheck src/search.ts --runtime dist/search.js
-ls-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
+lemmascript-crosscheck src/search.ts --runtime dist/search.js
+lemmascript-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
 ```
 
 ## 2. Detection model: semantic rules, not a bug list
@@ -207,7 +207,7 @@ precision, representation, equality, and postcondition failures.
 Default mode audits the proof domain, not every helper as a public boundary.
 
 ```sh
-ls-crosscheck src/search.ts --runtime dist/api.js --boundary
+lemmascript-crosscheck src/search.ts --runtime dist/api.js --boundary
 ```
 
 Boundary mode derives invalid regions from `decode` failure and the complement

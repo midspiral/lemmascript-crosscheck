@@ -14,7 +14,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
   try {
     if (message.type === "setup") {
       const modulePath = String(message.modulePath);
-      runtimeModule = await import(`${pathToFileURL(modulePath).href}?ls-crosscheck=${Date.now()}`) as Record<string, unknown>;
+      runtimeModule = await import(`${pathToFileURL(modulePath).href}?lemmascript-crosscheck=${Date.now()}`) as Record<string, unknown>;
       send({ id, status: "ok" });
       return;
     }

@@ -6,7 +6,7 @@ import type { AuditReport } from "../src/report-types.js";
 
 test("sampled success says it is not a proof", () => {
   const report: AuditReport = {
-    schema: "ls-crosscheck.report/v1",
+    schema: "lemmascript-crosscheck.report/v1",
     targets: [{
       target: "search", runtimeTarget: "search", conclusion: "no-issue", evidence: "sampled",
       cases: 100, seed: 17,
@@ -17,7 +17,7 @@ test("sampled success says it is not a proof", () => {
 
 test("a numeric counterexample leads with exact expected and actual values", () => {
   const report: AuditReport = {
-    schema: "ls-crosscheck.report/v1",
+    schema: "lemmascript-crosscheck.report/v1",
     provenance: {
       source: "/tmp/arraySum.ts", sourceSha256: "s", artifact: "/tmp/arraySum.dfy",
       artifactSha256: "a", lemmascript: "0.6.0", dafny: "4.11.0", runtime: "/tmp/arraySum.ts",
@@ -39,13 +39,14 @@ test("a numeric counterexample leads with exact expected and actual values", () 
   assert.match(text, /arraySum — ISSUE FOUND/);
   assert.match(text, /verified\s+9007199254740993/);
   assert.match(text, /JavaScript\s+9007199254740992/);
+  assert.match(text, /Replay\n  lemmascript-crosscheck \/tmp\/arraySum\.ts --replay 1234567890/);
   assert.match(text, /Evidence: replayed counterexample · Dafny 4\.11\.0 model/);
 });
 
 test("present undefined is not rendered as an omitted object property", () => {
   const value = { retries: undefined };
   const rendered = renderReport({
-    schema: "ls-crosscheck.report/v1",
+    schema: "lemmascript-crosscheck.report/v1",
     targets: [{
       target: "withDefaults", runtimeTarget: "withDefaults", conclusion: "issue", evidence: "counterexample", cases: 1, seed: 17,
       issue: {
