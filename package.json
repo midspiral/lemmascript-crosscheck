@@ -13,9 +13,8 @@
   "files": [
     "dist",
     "README.md",
-    "DESIGN_CONCISE.md",
-    "DESIGN_OPERATIONAL.md",
-    "DESIGN_UI.md"
+    "DESIGN.md",
+    "ROADMAP.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

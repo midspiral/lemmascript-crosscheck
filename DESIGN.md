@@ -1,539 +1,351 @@
-# lemmascript-crosscheck
+# LemmaScript Crosscheck design
 
-**Status:** proposal for review. This repository must contain no implementation
-until this document is accepted.
+**Status:** authoritative description of the v0.1.0 implementation.
 
-## 1. Product in one sentence
+[README.md](README.md) is the user guide. [ROADMAP.md](ROADMAP.md) contains proposed work that is not part of the current CLI contract.
 
-Given a LemmaScript source file, run its verified functions under JavaScript
-semantics and report the smallest concrete explanation of any gap between the
-proof and the program.
+## Product boundary
 
-The ordinary interaction is:
+LemmaScript proves properties of a formal model generated from TypeScript. Crosscheck looks for disagreements between that verified model and an executable TypeScript or JavaScript module.
+
+The common operation is a source-runtime audit:
 
 ```sh
 lemmascript-crosscheck path/to/file.ts
 ```
 
-There is no handwritten manifest, config file, oracle module, rejection class,
-artifact selection, or target-role declaration in the normal workflow.
+Crosscheck verifies the source, compiles the verified Dafny artifact into an executable model, generates inputs valid under the formal preconditions, runs both implementations, and compares their results and selected effects.
 
-## 2. What the user should experience
+Crosscheck does not:
 
-### One target
+- replace LemmaScript verification;
+- prove the LemmaScript translation correct;
+- infer compatibility from JavaScript execution alone;
+- treat sampled agreement as a proof;
+- test arbitrary malformed JavaScript inputs; or
+- safely sandbox untrusted source code.
 
-```text
-$ lemmascript-crosscheck examples/arraySum.ts
+The distinction between proof and transfer evidence is fundamental. LemmaScript proves the formal program. Crosscheck gathers evidence about whether JavaScript preserves that program's meaning.
 
-arraySum: INCOMPATIBLE
+## Design principles
 
-JavaScript integer arithmetic changes the result.
+### Exact values come first
 
-  input       [9007199254740991, 2]
-  model       9007199254740993
-  JavaScript  9007199254740992
+Generation begins in the formal value domain. Values are encoded for JavaScript only after they satisfy the verified preconditions. This preserves witnesses, such as integers outside JavaScript's exact range, that would be lost if generation began with JavaScript values.
 
-Why: LemmaScript proved this function over unbounded integers, but the
-TypeScript implementation uses IEEE-754 number arithmetic.
+### Unsupported semantics are explicit
 
-Fix: use bigint, or add and prove bounds that keep every input, intermediate,
-and result within the safe-integer range.
+A target is reported as `NOT CHECKED` when its types, preconditions, execution model, or toolchain cannot be compared faithfully. Unsupported behavior is never silently omitted from an otherwise successful claim.
 
-Proof: Dafny 4.11 verified the exact generated model.
-Check: 143 model-valid executions; seed 17.
-```
+### Findings are observational
 
-The report leads with the conclusion, counterexample, explanation, and repair.
-Internal obligation names, hashes, generated paths, and probe inventories are
-available through `--explain` and `--json`, not printed by default.
+Crosscheck reports a mismatch because the verified model and runtime produced different observable behavior—not because a source construct appears on a blacklist. A call to `push`, for example, matters only when it changes a caller-visible argument absent from the model.
 
-### Several targets
+### The default runtime is explicit
 
-```text
-$ lemmascript-crosscheck examples/
+Without `--runtime`, the TypeScript source is also the runtime module. This is called a source-runtime audit. Built or deployed code must be named with `--runtime`; renamed exports must be mapped with `--entry`.
 
-7 targets
+### Reports state evidence strength
 
-INCOMPATIBLE  arraySum       integer precision changes the result
-INCOMPATIBLE  binarySearch   formal integer domain is wider than number
-INCOMPATIBLE  pushItem       mutates an input absent from the formal model
-INCOMPATIBLE  divide         exact 1/10 differs from its binary64 value
-CHECKED       shiftWide      no mismatch in 100 generated executions
-CHECKED       low64          no mismatch in 100 generated executions
-CHECKED       floorDivision  complete singleton input domain checked
+The user-facing conclusion and its evidence are separate. A counterexample establishes an issue. A zero-argument target has one exhaustive input tuple. Other successful runs are sampled and always say that they are not a proof.
 
-4 incompatible · 3 checked
-```
-
-A multi-target default report is one row per target. Full narratives require
-`--explain <target>` or `--details`.
-
-### Unsupported input
+## System overview
 
 ```text
-loadUser: UNSUPPORTED
-
-This verified target performs asynchronous ambient I/O, but this Crosscheck
-build has no async effect model. Nothing was tested and no compatibility claim
-was made.
+TypeScript source
+      |
+      +--> LemmaScript typed metadata
+      +--> LemmaScript/Dafny verification --> checked .dfy artifact
+                                            |
+                                            v
+                                  compiled executable model
+                                            |
+exact model-value generator --> precondition filter --> representation bridge
+                                            |
+                         +------------------+------------------+
+                         |                                     |
+                  model worker                         runtime worker
+                         |                                     |
+                         +------------- comparison ------------+
+                                            |
+                                  shrink + save replay
+                                            |
+                                    human / JSON report
 ```
 
-Unsupported never becomes a clean result and never produces dozens of
-secondary “unassessed obligation” messages.
+The main implementation components are:
 
-## 3. The questions Crosscheck answers
+| Component | Files | Responsibility |
+| --- | --- | --- |
+| CLI | `src/cli.ts` | Argument parsing, progress, output mode, and process exit status. |
+| Verification adapter | `src/toolchain.ts` | LemmaScript invocation, typed metadata, source/artifact identity, and backend selection. |
+| Model compiler | `src/dafny-build.ts` | Cached compilation of the already verified Dafny artifact to JavaScript. |
+| Semantic values | `src/rational.ts`, `src/codec.ts` | Exact rationals and a lossless JSON-line representation. |
+| Representation bridge | `src/bridge.ts`, `src/dafny-runtime.ts` | Formal-to-runtime encoding and Dafny value marshalling. |
+| Input discovery | `src/generate.ts`, `src/spec.ts` | Deterministic edges, seeded generation, and precondition evaluation. |
+| Execution | `src/workers.ts`, `src/model-worker.ts`, `src/runtime-worker.ts` | Separate model and runtime child processes with deadlines. |
+| Audit engine | `src/audit.ts`, `src/shrink.ts`, `src/cases.ts` | Classification, comparison, shrinking, and replay persistence. |
+| Reporting | `src/report.ts`, `src/report-types.ts` | Human output, stable JSON structure, and exit-code policy. |
 
-The default audit answers four questions for each exported verified target:
+## Audit lifecycle
 
-1. **Can every value admitted by the proof be represented faithfully by the
-   TypeScript signature?**
-2. **Do JavaScript operations preserve the formal meaning on those values?**
-3. **Does the executable function agree with the verified model on generated
-   model-valid executions?**
-4. **Does JavaScript exhibit an effect—mutation, exception, nondeterminism, or
-   nontermination—that is absent from the formal model?**
+### 1. Verify and identify the source
 
-These questions concern the proof domain. Arbitrary malformed JavaScript input
-is a separate API-boundary question and is checked only with `--boundary`.
-This prevents an internal algorithm from producing seventeen boundary warnings
-when nobody claimed it was a validation wrapper.
+Crosscheck resolves the source path and hashes it before invoking LemmaScript. It accepts LemmaScript 0.6.x typed-info schema 1.
 
-## 4. Claims and result vocabulary
+When `LEMMASCRIPT` names a checkout, Crosscheck runs that checkout's `tools/src/lsc.ts` through `tsx`. Otherwise it invokes `lsc` from `PATH`.
 
-Crosscheck uses five top-level results:
-
-- **INCOMPATIBLE** — a proof query or concrete execution disproved semantic
-  transfer.
-- **PROVED** — all required transfer obligations were discharged universally
-  by backend-checked certificates. This will be uncommon initially.
-- **CHECKED** — the audit completed and found no mismatch in its stated finite
-  or sampled scope. This is evidence, not a theorem.
-- **UNSUPPORTED** — the source uses a semantic feature the bridge cannot
-  represent. Nothing is silently skipped.
-- **ERROR** — provenance, verification, loading, or tool execution failed.
-
-There is no top-level `RISK` counter. A problem is named directly: integer
-precision, domain mismatch, input mutation, wrong exception, unsupported real,
-and so on.
-
-Exit codes are deliberately small:
+The verification adapter performs:
 
 ```text
-0  every selected target is PROVED or CHECKED
-1  at least one selected target is INCOMPATIBLE
-2  at least one selected target is UNSUPPORTED or ERROR
+lsc version
+lsc info --typed <source>
+lsc check --backend=dafny <source>
+dafny --version
 ```
 
-If a run contains both an incompatibility and an incomplete target, exit 2;
-the displayed rows retain both facts.
+Lean-backed sources are rejected because the executable model runner currently supports Dafny only. After verification, Crosscheck hashes the source again and stops if it changed during the check.
 
-## 5. No user-authored semantic manifest
+The verified artifact is the adjacent `<source-base>.dfy` file produced and checked by LemmaScript. Its hash becomes part of report provenance. Running the audit may refresh LemmaScript's generated sidecars in the source directory, just as a normal `lsc check` would.
 
-Crosscheck must not accept free-form assertions such as:
+### 2. Compile the verified model
 
-```json
-{ "kind": "proved", "proof": "the midpoint is safe" }
-```
+The Dafny artifact is compiled to JavaScript with `dafny build -t js --no-verify`. Skipping verification at this stage is safe only within the preceding protocol: LemmaScript has already verified the artifact, Crosscheck checks the expected hash before compilation, and it checks the hash again afterward.
 
-That moves the soundness question into an unchecked JSON file. It is neither
-elegant nor trustworthy.
+Compiled models are cached by the artifact contents and the resolved `bignumber.js` dependency. Crosscheck patches the generated dependency path and exposes the Dafny runtime/module objects needed by the model worker. An unexpected Dafny output shape is a hard failure rather than a best-effort load.
 
-Instead, LemmaScript emits an **audit bundle** after verification. Crosscheck
-invokes this through a public, versioned LemmaScript command or API:
+### 3. Select targets and runtime exports
+
+Crosscheck selects exported functions from LemmaScript's typed metadata. `--only` restricts the audit to one formal target.
+
+The runtime module is:
+
+- the source itself by default; or
+- the module supplied by `--runtime`.
+
+The runtime export normally has the formal target's name. Repeated `--entry formalName=runtimeName` options override that mapping. Missing or non-function exports prevent the target from being checked.
+
+Before generation, the semantic bridge recursively checks every parameter and result type. Generic targets, opaque or recursive user types, function values, unknown types, and `void` results are among the unsupported cases. Targets containing `havoc`, `assume`, or autohavoc are also excluded because their model is nondeterministic or assumption-dependent.
+
+### 4. Generate and filter formal inputs
+
+Candidate discovery combines:
+
+1. a deterministic baseline;
+2. type-specific edge values;
+3. one-parameter variations;
+4. bounded pairwise combinations; and
+5. pseudorandom values derived from `--seed`.
+
+Numeric edges include signed small values, 32-bit boundaries, JavaScript's safe-integer boundary, exact and non-dyadic rationals, and array combinations that can overflow an otherwise representable accumulator. Composite generators recursively cover arrays, tuples, optionals, sets, maps, records, string unions, aliases, and discriminated unions.
+
+Zero-argument functions produce one candidate: the empty argument tuple.
+
+Each candidate is evaluated against the typed `requires` expressions before runtime encoding. The precondition interpreter uses exact integers and rationals. It can delegate calls to functions present in the compiled model, which supports predicates such as a verified sortedness helper. If an expression lies outside the implemented evaluator, the target is `NOT CHECKED`; Crosscheck does not guess whether the candidate is valid.
+
+Candidates then fall into three classes:
+
+- precondition-invalid values, which are ignored;
+- precondition-valid but unrepresentable values, which can witness an input-domain issue; and
+- precondition-valid, faithfully representable values, which are executed.
+
+`--cases` limits successful representable executions per target, not the number of raw candidates considered.
+
+### 5. Execute model and runtime
+
+The model and runtime run in separate Node child processes using a request/response JSON-lines protocol. They are isolated from the CLI process, but they are not security sandboxes.
+
+The runtime worker loads TypeScript through `tsx`, calls the selected export synchronously, and records:
+
+- the returned value;
+- encoded arguments before and after the call;
+- `console.log`, `info`, `debug`, `warn`, and `error` output;
+- a thrown exception; or
+- a returned promise, which is reported as unsupported async behavior.
+
+The model worker marshals the same exact arguments into the compiled Dafny model. When a runtime result exists, it also converts that result into the corresponding formal value and performs exact equality in model space.
+
+Each worker request has the `--timeout` deadline. A timed-out worker is killed. If the verified model returns for the same input, runtime timeout is a concrete issue; if a comparison cannot be completed, the target is `NOT CHECKED`.
+
+### 6. Compare observable behavior
+
+For a proof-valid representable input (m), the central relation is:
 
 ```text
-lsc audit-bundle path/to/file.ts
+decode(runtime(encode(m))) = verifiedModel(m)
 ```
 
-The bundle contains machine-derived data:
+Crosscheck also compares encoded arguments before and after the call and checks captured console output. The implemented issue categories are:
 
-- source hash and resolved LemmaScript version;
-- backend name, version, exact artifact hash, and verification outcome;
-- exported verified targets and support functions;
-- formal parameter and result types;
-- runtime representation selected for each type occurrence;
-- callable verified model, precondition, postcondition, and equality;
-- effect model, including whether input mutation is represented;
-- structured transfer obligations and backend-checked outcomes;
-- canonical encoders, decoders, and model-value serialization metadata.
+| Category | Meaning |
+| --- | --- |
+| `input-domain` | The proof accepts an input that the TypeScript representation cannot encode faithfully. |
+| `result-mismatch` | Runtime and verified model return unequal exact values. |
+| `input-mutation` | JavaScript changes a caller-visible argument absent from the value model. |
+| `optional-presence` | JavaScript distinguishes omission from a property explicitly set to `undefined`. |
+| `console-output` | JavaScript emits output absent from the functional model. |
+| `runtime-threw` | JavaScript throws where the verified model returns. |
+| `runtime-timeout` | JavaScript misses the deadline where the verified model returns. |
 
-The bundle is content-addressed and schema-versioned. Every `proved` outcome
-references a structured obligation in the exact verified artifact. It is never
-an unaudited prose claim.
+Optional record inputs receive one additional kind of probe. After the canonical omitted-property representation succeeds, Crosscheck tries present-`undefined` variants and detects results that depend on JavaScript property presence.
 
-Crosscheck verifies the source hash and bundle identity, but it does not scrape
-`.dfy`, `.dfy.gen`, Lean files, TypeScript comments, or filenames. Artifact
-selection belongs to LemmaScript because LemmaScript created and verified the
-artifact.
+The current engine reports the first concrete issue found for each target. If no executable mismatch appears but a valid unrepresentable input was found, it reports that domain witness. This ordering favors observed wrong runtime behavior over a later domain-only explanation.
 
-This audit-bundle interface is a prerequisite. Crosscheck implementation does
-not begin by recreating its information manually.
+### 7. Shrink and persist failures
 
-## 6. Default target and runtime selection
+Executable and input-domain witnesses are reduced by a deterministic, type-directed shrinker. Candidate reductions are retained only while the same issue relation continues to fail. Integers move toward zero and semantic boundaries; rationals, strings, arrays, tuples, and records receive structural reductions.
 
-The default targets are functions that the audit bundle marks as:
+The minimized witness is replayed before reporting. Its issue ID is the first ten hexadecimal characters of a SHA-256 digest over the target, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity.
 
-- verified;
-- exported from the TypeScript module; and
-- callable by the initial synchronous function runner.
+Saved cases record the source path and hash, target, runtime export, issue category, arguments, and any representation variant. Replay refuses to run if the source hash has changed.
 
-LemmaScript determines verification and support roles from its own typed
-program. Crosscheck does not equate “exported” with “proved,” and does not
-report specification helpers as product targets.
+## Semantic representations
 
-The default executable is the TypeScript source module loaded through a
-versioned, recorded TypeScript runtime. The report calls this a **source-runtime
-audit**; it does not pretend to have checked a production bundle.
+Crosscheck keeps formal values separate from JavaScript values and from the tagged JSON transport used between processes.
 
-A deployed artifact can be selected without a project manifest:
+### Numbers
+
+Formal integers are held as `bigint` regardless of their TypeScript representation:
+
+- a `bigint`-backed formal integer crosses exactly;
+- a `number`-backed formal integer crosses only when conversion to `number` and back preserves the exact integer.
+
+This admits `9007199254740992`, which is exactly representable, while rejecting `9007199254740993`.
+
+Formal reals use normalized `Rational` values. Runtime binary64 numbers are decomposed into the exact rational represented by their IEEE-754 bits before comparison. Consequently, `3 / 2` can agree exactly while the runtime value for `1 / 10` differs from the mathematical rational.
+
+`NaN` and infinities have no ordinary exact-real representation. Invalid numeric encodings are explicit failures.
+
+### Composite values
+
+Arrays and tuples are encoded element by element. Sets and maps retain their collection identity in the tagged transport; map inputs can target either JavaScript `Map` or object-shaped TypeScript representations. Records omit absent optional fields in their canonical runtime form.
+
+Supported user declarations are non-generic string unions, aliases, records, and discriminated unions whose nested fields are themselves supported. Recursive and opaque declarations are rejected before execution.
+
+Strings are transported losslessly. Dafny marshalling rejects lone UTF-16 surrogates rather than silently changing their meaning.
+
+### Wire encoding
+
+Plain JSON cannot preserve `bigint`, rational values, `undefined`, sets, maps, or special numeric values. `src/codec.ts` uses tagged objects for these values, supplies stable keys for deterministic deduplication, and provides unambiguous human formatting. This same encoding underpins worker communication, equality of observed argument state, shrinking, saved cases, and issue IDs.
+
+## Reports and policy
+
+The human interface has three conclusions:
+
+| Conclusion | Evidence | Interpretation |
+| --- | --- | --- |
+| `ISSUE FOUND` | Counterexample | One minimized, replayed witness demonstrates a disagreement. |
+| `NO ISSUE FOUND` | Sampled or exhaustive | No disagreement appeared in the stated scope. |
+| `NOT CHECKED` | Failure reason | Unsupported semantics or a tool/runtime failure prevented a claim. |
+
+Exit status is operational policy:
+
+```text
+0  every target reports NO ISSUE FOUND
+1  at least one target reports ISSUE FOUND
+2  at least one target reports NOT CHECKED
+```
+
+Exit 2 takes precedence in mixed reports, while issue rows remain visible.
+
+A single-target report leads with the conclusion, witness, expected and actual behavior, cause, resolution, replay command, and evidence. Multi-target output uses one summary row per target. `--details` expands every target; it does not add a separate diagnostic protocol. `--json` emits the stable `lemmascript-crosscheck.report/v1` structure.
+
+Reporting language follows these rules:
+
+- say “verified model,” not “oracle”;
+- say “proof-valid input,” not merely “test input”;
+- distinguish a formal-only domain witness from an executed JavaScript call;
+- show exact mathematical and runtime values when they differ;
+- never call sampled agreement “safe,” “passed,” or “proved”;
+- state unsupported behavior once with a concrete next step; and
+- keep hashes and internal transport details out of default human output.
+
+## Determinism, provenance, and caches
+
+The report records source and artifact paths and hashes, LemmaScript and Dafny versions, and the runtime module path. Source and artifact hashes guard the transitions between verification, compilation, and replay.
+
+Generation order, edge values, seeded random generation, shrinking order, wire encoding, and issue IDs are deterministic for the same versions and inputs. Runtime behavior and external tool behavior may still introduce nondeterminism; the current implementation does not repeatedly execute clean cases to detect it.
+
+Saved counterexamples use:
+
+```text
+$LEMMASCRIPT_CROSSCHECK_CACHE
+$XDG_CACHE_HOME/lemmascript-crosscheck/cases
+~/.cache/lemmascript-crosscheck/cases
+```
+
+in that precedence order.
+
+Compiled models use `$LEMMASCRIPT_CROSSCHECK_BUILD_CACHE` or `<os-temp>/lemmascript-crosscheck-build`. Build products are content-addressed; case files are issue-addressed.
+
+## Trust and safety boundary
+
+Crosscheck trusts:
+
+- LemmaScript's typed metadata and successful Dafny verification;
+- the convention connecting a source path to its adjacent verified `.dfy` artifact;
+- Dafny's JavaScript compiler and generated runtime;
+- exact-value codecs and Dafny/runtime marshalling;
+- precondition evaluation and candidate classification;
+- the runtime loader, observation hooks, and comparison logic; and
+- the host Node.js process and filesystem.
+
+The artifact hash protocol prevents Crosscheck from knowingly compiling a different Dafny file than the one just verified. It does not independently prove that LemmaScript's generated model faithfully represents the TypeScript source.
+
+Crosscheck imports and executes the runtime module. Child-process separation and deadlines protect the CLI from ordinary crashes and nontermination, but they do not restrict filesystem, network, subprocess, or other ambient access. Users must audit only code they trust to execute.
+
+## Current limitations
+
+The v0.1.0 implementation intentionally has a narrower contract than the long-term design:
+
+- only Dafny-backed LemmaScript 0.6.x sources are supported;
+- the CLI accepts one source file, not a directory or project;
+- targets must be synchronous, exported, non-generic functions;
+- generic, recursive, opaque, function-typed, unknown, and `void` value shapes are unsupported;
+- `havoc`, `assume`, and autohavoc targets are not compared;
+- the typed precondition evaluator supports a finite expression subset;
+- successful parameterized audits are sampled, never universally proved;
+- observed effects are limited to argument mutation, console output, throws, promises, and deadlines;
+- ambient state, global mutation, filesystem/network effects, and nondeterminism are not modeled;
+- arbitrary invalid JavaScript inputs and boundary enforcement are not tested;
+- there are no per-operation transfer certificates or `PROVED` conclusion; and
+- workers provide process isolation, not a security sandbox.
+
+Planned extensions and unresolved product choices are tracked in [ROADMAP.md](ROADMAP.md).
+
+## Tests and release checks
+
+Unit tests cover exact numeric representation, candidate generation, optional presence, rational arithmetic, typed preconditions, shrinking, and report wording. The standard validation sequence is:
 
 ```sh
-lemmascript-crosscheck src/search.ts --runtime dist/search.js
+npm run typecheck
+npm test
+npm run build
+npm pack --dry-run
 ```
 
-Targets map by the bundle's exported names. A renamed or wrapped production
-entry point is supplied directly:
-
-```sh
-lemmascript-crosscheck src/search.ts --runtime dist/api.js --entry binarySearch=search
-```
-
-If an export is missing or ambiguous, the target is `ERROR`. Crosscheck never
-guesses another callable.
-
-## 7. Numeric semantics are the first feature, not an extension
-
-The first usable version supports all numeric distinctions already made by
-LemmaScript:
-
-### Formal integers
-
-Formal integers are represented internally as arbitrary-precision integers.
-For runtime `number`, canonical encoding is limited to safe integers. For
-runtime `bigint`, integer encoding is exact, subject only to declared resource
-limits.
-
-Domain coverage asks:
-
-```text
-forall x admitted by the precondition, encode(x) exists
-```
-
-An unbounded `int` backed by `number` is therefore incompatible even if a
-hundred small tests agree.
-
-### Formal reals
-
-Formal reals are transported as exact rationals, never rounded before the
-comparison. A JavaScript binary64 value is converted to its exact rational
-value before equality is checked.
-
-Consequences include:
-
-- `3 / 2` may agree because `1.5` is exactly representable;
-- `1 / 10` does not equal the exact rational `1/10` as a binary64 value;
-- `NaN` and infinities have no image in an ordinary exact-real model;
-- a proved range alone does not establish exact representability.
-
-Exact-real support is required before the first release. A tool motivated by
-JavaScript floating-point gaps cannot defer the main floating-point case.
-
-### Intermediate operations
-
-Safe inputs do not imply safe intermediates or results. LemmaScript emits
-structured obligations for numeric operations whose formal and JavaScript
-semantics may differ. The backend either proves the necessary range/exactness
-condition, returns a counterexample, or reports it unsupported.
-
-Dynamic generation also prioritizes interacting edges such as:
-
-```text
-MAX_SAFE_INTEGER + 2
-MAX_SAFE_INTEGER * 2
-large positive + small positive
-large positive + large negative
-negative division and remainder boundaries
-```
-
-Random generation supplements these cases; it does not replace them.
-
-## 8. Model values and representations
-
-Case generation begins in model space. It never generates JavaScript numbers
-first and thereby loses the values that matter.
-
-The initial representation kernel supports:
-
-- booleans;
-- integers as `number` or `bigint`;
-- exact rationals compared with `number`;
-- strings with explicit UTF-16/scalar semantics;
-- dense arrays;
-- fixed tuples;
-- plain records;
-- optionals with explicit presence semantics.
-
-For every representation `T`, the bundle and bridge define:
-
-```text
-encode_T(model value) -> runtime value | unrepresentable
-decode_T(runtime value) -> model value | invalid
-```
-
-The required adapter law is:
-
-```text
-decode_T(encode_T(x)) = x
-```
-
-Adapter laws have exhaustive/property tests independent of user programs.
-Unsupported nested types stop the target before runtime execution.
-
-## 9. Preconditions and postconditions
-
-LemmaScript emits callable precondition and postcondition evaluators as part of
-the verified model bundle. Crosscheck never asks users to name helper functions
-or restate inline expressions.
-
-The generator partitions model values into:
-
-- values satisfying the formal precondition and faithfully encodable;
-- values satisfying the precondition but not faithfully encodable;
-- values outside the precondition.
-
-The second category disproves full-domain transfer. The third category is used
-only by boundary mode.
-
-If the runtime result is malformed or unrepresentable, Crosscheck still asks
-the model for the expected result and displays both values. A failed decode
-must not erase the most useful part of the counterexample.
-
-## 10. Effects and execution isolation
-
-Each model-valid call runs in an isolated worker with a deadline. Crosscheck
-records:
-
-- return value or exception;
-- argument state before and after the call;
-- console output;
-- deterministic replay;
-- timeout or worker death.
-
-An observed effect is incompatible only when that effect is absent from the
-formal model. For example, if Dafny models an input as an immutable sequence
-but JavaScript `push` mutates the caller's array, the report says exactly that.
-Crosscheck does not require a user-authored `effects: pure` switch to notice the
-gap.
-
-Async functions, ambient I/O, classes, and stateful protocols are unsupported
-until the bundle supplies corresponding effect and observation models.
-
-## 11. Boundary mode
-
-Default mode checks behavior on the proof domain. Optional boundary mode asks
-whether a public adapter enforces that domain:
-
-```sh
-lemmascript-crosscheck src/search.ts --runtime dist/api.js --boundary
-```
-
-Boundary behavior must be declared by LemmaScript source metadata or use a
-standard branded protocol from `@lemmascript/runtime`. Initial support is:
-
-- a branded `PreconditionError`; or
-- a standard tagged `Result` error.
-
-An incidental native `TypeError` is not a successful guard. Invalid probes are
-grouped by one root finding rather than counted as seventeen independent
-risks. If no boundary contract exists, the result is one `UNSUPPORTED` line.
-
-Crosscheck does not invent a requirement that every verified internal function
-must validate arbitrary JavaScript values.
-
-## 12. Evidence strategy
-
-Evidence is collected in this order:
-
-1. verify bundle and runtime provenance;
-2. consume backend-checked domain and operation obligations;
-3. execute deterministic edge and backend-provided counterexamples;
-4. generate additional model-valid cases;
-5. shrink any failure while preserving it;
-6. replay the minimal witness in a fresh worker.
-
-Every execution finding includes:
-
-- minimal model input;
-- exact encoded runtime input;
-- expected model result;
-- actual runtime result or effect;
-- source target and runtime export;
-- deterministic replay command.
-
-Sampling is always labeled with its case count and seed. “No mismatch found”
-never becomes “proved.”
-
-## 13. Reporting rules
-
-The renderer follows these rules:
-
-1. conclusion first;
-2. one finding per semantic root cause;
-3. concrete witness before internal terminology;
-4. expected versus actual whenever available;
-5. one repair suggestion, not a menu of unrelated possibilities;
-6. proof and sampling scope at the end;
-7. no hashes or obligation dumps in the default view;
-8. one row per target for multi-target runs;
-9. deterministic text and JSON for identical semantic inputs.
-
-The default single-target report should normally fit within twenty-five lines.
-The default multi-target report should normally fit within one terminal screen.
-
-`--explain <target>` shows the complete narrative. `--details` shows structured
-obligations and provenance. `--json` emits the lossless stable report and no
-human prose on stdout.
-
-## 14. Architecture
-
-```text
-source path
-    |
-    v
-local LemmaScript audit-bundle API
-    |
-    +--> verified model + predicates + structured certificates
-    |
-    v
-model-value generator and representation bridge
-    |
-    +--> isolated verified-model runner
-    +--> isolated source/deployed-runtime runner
-    |
-    v
-root-cause classifier and shrinker
-    |
-    +--> concise report
-    +--> detailed JSON
-```
-
-The implementation has five conceptual modules:
-
-1. **Bundle client** — invokes the project-local LemmaScript and validates its
-   versioned audit bundle.
-2. **Representation bridge** — exact model values, codecs, adapter laws, and
-   targeted edge values.
-3. **Runners** — isolated verified model and JavaScript runtime execution.
-4. **Audit engine** — domain checks, comparisons, effect observations,
-   shrinking, and replay.
-5. **Reporter** — root-cause grouping and deterministic human/JSON output.
-
-There is no public manifest-authoring layer and no generic configuration
-language in the initial product.
-
-## 15. Trust boundary
-
-Crosscheck necessarily trusts:
-
-- LemmaScript's typed translation and audit-bundle emitter;
-- the selected verification backend and its successful check;
-- bundle model callables and structured certificates;
-- representation codecs and model/runtime marshalling;
-- the JavaScript and model execution sandboxes;
-- Crosscheck's comparison and shrinking logic.
-
-It does not claim to prove LemmaScript's translator correct. It independently
-looks for a disagreement between the verified model and JavaScript execution,
-while making the exact trusted components visible in detailed output.
-
-## 16. Required end-to-end examples
-
-The following adjacent LemmaScript examples are release gates:
-
-| Example | Required default result |
-|---|---|
-| `binarySearch.ts` | incompatible formal integer domain; representable executions may still agree |
-| `arraySum.ts` | concrete safe-input/intermediate or result precision counterexample with exact expected and actual values |
-| `division.ts::threeHalves` | checked agreement because `1.5` is exactly representable |
-| `division.ts::divide` | exact-real/binary64 counterexample such as `1 / 10` |
-| `division.ts::floorDivision` | singleton input domain completes without looping |
-| `bigintBits.ts` | checked agreement on valid nonnegative BigInt inputs |
-| `nestedPush.ts` | input mutation absent from the immutable formal model |
-| optional-record example | distinguishes omission from present `undefined` without heuristic source parsing |
-
-Each command must work with only the source path. Tests may use synthetic
-bundles for fault injection, but release claims come from real bundles emitted
-by LemmaScript.
-
-## 17. Definition of done
-
-The first releasable version satisfies all of these:
-
-- `lemmascript-crosscheck file.ts` is the complete common workflow;
-- no handwritten semantic manifest or oracle is needed;
-- no user-authored prose can produce a `PROVED` result;
-- exact integers, BigInt, and exact-real/binary64 comparison work;
-- inline preconditions and postconditions arrive as bundle callables;
-- unsafe intermediate arithmetic is deliberately explored;
-- every concrete mismatch shows exact model and runtime results;
-- zero-argument and finite-domain targets terminate correctly;
-- unsupported semantics stop early and are stated once;
-- suite output is one row per target;
-- detailed output is opt-in;
-- the tool writes only to a content-addressed cache;
-- all release-gate examples above behave as specified;
-- the package is not published before these gates pass.
-
-## 18. Explicitly rejected designs
-
-This design rejects:
-
-- handwritten per-source manifests;
-- trusted free-text proof claims;
-- a required config file for ordinary use;
-- manually maintained oracle modules;
-- guessing proof artifacts by filename;
-- treating every export as a target;
-- probing malformed JavaScript inputs in the default proof-domain audit;
-- requiring every function to throw a project-specific configured class;
-- reporting each malformed-input variant as a separate risk;
-- leading with hashes, obligation codes, seeds, or pass counts;
-- calling sampled agreement a proof;
-- deferring exact-real support while claiming to audit number semantics;
-- adding implementation layers before the LemmaScript audit bundle exists.
-
-## 19. Implementation order
-
-Implementation begins only after this design is reviewed.
-
-1. **LemmaScript bundle spike.** Make `lsc audit-bundle` emit complete,
-   machine-derived bundles for `arraySum`, `division`, `binarySearch`,
-   `bigintBits`, and `nestedPush`.
-2. **Numeric vertical slice.** Implement exact integer, BigInt, rational,
-   binary64, boolean, and array bridges; run the five release-gate files.
-3. **Counterexamples and output.** Add targeted generation, shrinking, replay,
-   and the specified concise reports.
-4. **Composite values.** Add strings, tuples, records, and optional presence
-   with adapter-law tests.
-5. **Deployed runtime and boundary mode.** Add `--runtime`, `--entry`, standard
-   boundary contracts, and grouped invalid-input diagnostics.
-6. **Package hardening.** Determinism, cache isolation, failure injection,
-   platform tests, documentation, and only then publication review.
-
-At the end of each step, the tool must remain usable through the one-command
-interface. A phase that requires users to author protocol scaffolding is not
-complete.
-
-## 20. Decisions to review
-
-This proposal makes three opinionated choices:
-
-1. the normal audit is proof-domain compatibility; arbitrary-input boundary
-   enforcement is opt-in;
-2. source-runtime execution is the zero-config default, while deployed output
-   requires `--runtime`;
-3. the separate Crosscheck package depends on a new public LemmaScript
-   audit-bundle API rather than importing compiler internals.
-
-Those choices should be accepted or changed before implementation. Everything
-else follows from them.
+End-to-end regression fixtures live in the adjacent LemmaScript repository. The important behaviors are:
+
+| Fixture | Expected behavior |
+| --- | --- |
+| `arraySum.ts` | Finds a safe-input accumulator precision mismatch. |
+| `division.ts` | Distinguishes exact dyadic agreement from non-dyadic binary64 mismatch. |
+| `bigintBits.ts` | Samples exact BigInt behavior without finding a mismatch. |
+| `nestedPush.ts` | Finds caller-visible input mutation. |
+| `spreadMerge.ts` | Finds omitted versus present-`undefined` behavior. |
+
+These examples validate the whole toolchain path: LemmaScript metadata and verification, Dafny compilation, formal generation, TypeScript execution, exact comparison, shrinking, and reporting.
+
+## Settled decisions
+
+The current implementation embodies these decisions:
+
+1. The default audit concerns the proof-valid domain, not arbitrary malformed JavaScript input.
+2. The source module is the zero-configuration runtime; deployed output requires `--runtime`.
+3. Formal values are generated exactly and only then encoded for JavaScript.
+4. No user-authored semantic manifest or oracle is required.
+5. A successful sample is evidence, never a proof claim.
+6. Human output leads with the smallest actionable explanation rather than internal obligations.
+7. Unsupported behavior prevents a compatibility conclusion instead of being skipped.
+
+Changes to these decisions should update this document, the user-facing README, and the corresponding tests in the same change.
