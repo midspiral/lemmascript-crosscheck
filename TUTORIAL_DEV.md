@@ -1,6 +1,6 @@
 # Developer tutorial: tracing and extending Crosscheck
 
-This is the practical guide to the LemmaScript Crosscheck codebase. [DESIGN.md](DESIGN.md) remains the authoritative behavioral contract; this tutorial explains how to read, run, test, and safely extend the implementation.
+This is the practical guide to the LemmaScript Crosscheck codebase. [DESIGN.md](DESIGN.md) remains the authoritative behavioral contract, while [ALGORITHM.md](ALGORITHM.md) gives the exact current search and comparison procedure. This tutorial explains how to read, run, test, and safely extend the implementation.
 
 ## How hard is a new issue category?
 

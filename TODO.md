@@ -95,7 +95,7 @@ Then:
 - [ ] Replaying a saved witness reproduces the same issue category and failure code.
 - [ ] `test/shrink.test.ts` covers every supported `Ty` family, not only integers.
 - [ ] `test/audit.test.ts` covers end-to-end input-domain minimization for nested records, string unions, and discriminated unions.
-- [ ] `DESIGN.md` and `TUTORIAL_DEV.md` describe the behavior actually implemented. `DESIGN.md` currently calls the shrinker type-directed even though the implementation is representation-agnostic.
+- [ ] Keep `DESIGN.md`, `ALGORITHM.md`, and `TUTORIAL_DEV.md` aligned as the typed shrinker replaces the currently documented representation-directed implementation.
 
 ## P1: generate inputs that reach domain-defining behavior
 

@@ -2,7 +2,7 @@
 
 **Status:** authoritative description of the v0.1.0 implementation.
 
-[README.md](README.md) is the user guide, and [TUTORIAL_DEV.md](TUTORIAL_DEV.md) is the practical code-reading and extension guide. This document records the authoritative implementation architecture, behavioral contract, and settled design decisions.
+[README.md](README.md) is the user guide, [TUTORIAL_DEV.md](TUTORIAL_DEV.md) is the practical code-reading and extension guide, and [ALGORITHM.md](ALGORITHM.md) records the exact current search and comparison procedure. This document records the authoritative implementation architecture, behavioral contract, and settled design decisions.
 
 ## Product boundary
 
@@ -196,7 +196,7 @@ The current engine reports the first concrete issue found for each target. If no
 
 ### 7. Shrink and persist failures
 
-Executable and input-domain witnesses are reduced by a deterministic, type-directed shrinker. Candidate reductions are retained only while the same issue relation continues to fail. Integers move toward zero and semantic boundaries; rationals, strings, arrays, tuples, and records receive structural reductions. Optional-presence probes retain their paired runtime representation, and runtime-timeout findings retain the input that actually crossed the deadline instead of probing a worker that was just killed.
+Executable and input-domain witnesses currently pass through a deterministic, representation-directed shrinker. Integers move toward zero and semantic boundaries, while rationals, strings, arrays, and plain objects receive structural reductions. The shrinker does not yet consult LemmaScript types: executable reductions must reproduce the same category, but input-domain reductions need only remain unrepresentable. It can therefore construct an invalid finite-string, discriminant, or tuple witness; this known correctness gap is tracked as P0 in [TODO.md](TODO.md). Optional-presence findings retain their paired runtime representation without shrinking, and runtime-timeout findings retain the input that actually crossed the deadline instead of probing a worker that was just killed.
 
 Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the source and runtime entry hashes, formal and runtime targets, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity. Content identity namespaces different audited code while remaining stable when byte-identical files move.
 

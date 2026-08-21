@@ -255,4 +255,4 @@ npm run typecheck
 npm run build
 ```
 
-The implementation lives in `src/`, with focused unit tests in `test/`. Start with [TUTORIAL_DEV.md](TUTORIAL_DEV.md) for a guided codebase tour and a worked example of adding an issue category. The authoritative architecture and design decisions are documented in [DESIGN.md](DESIGN.md).
+The implementation lives in `src/`, with focused unit tests in `test/`. Start with [TUTORIAL_DEV.md](TUTORIAL_DEV.md) for a guided codebase tour and a worked example of adding an issue category. The authoritative architecture and design decisions are documented in [DESIGN.md](DESIGN.md); the exact operational procedure, including generation and finding precedence, is in [ALGORITHM.md](ALGORITHM.md).

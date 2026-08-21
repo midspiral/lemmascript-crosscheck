@@ -30,6 +30,7 @@
     "README.md",
     "TUTORIAL.md",
     "TUTORIAL_DEV.md",
+    "ALGORITHM.md",
     "DESIGN.md"
   ],
   "publishConfig": {
