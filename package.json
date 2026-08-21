@@ -28,6 +28,7 @@
   "files": [
     "dist/src",
     "README.md",
+    "TUTORIAL.md",
     "DESIGN.md"
   ],
   "publishConfig": {

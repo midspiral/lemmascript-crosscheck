@@ -59,6 +59,8 @@ lemmascript-crosscheck path/to/file.ts --only exportedFunction --cases 40
 
 An audit performs a normal LemmaScript check, so it may refresh generated Dafny sidecars next to the source before Crosscheck executes the model.
 
+For a guided end-to-end example—from writing a verified function through finding, replaying, and repairing a JavaScript counterexample—see [TUTORIAL.md](TUTORIAL.md).
+
 ## Using a LemmaScript source checkout
 
 A source checkout is a local Git clone of the LemmaScript repository, containing its source code and development tools. It is different from installing the published `lemmascript` package from npm. Use a checkout when developing LemmaScript itself, testing unpublished LemmaScript changes, or running the examples stored in its repository.
