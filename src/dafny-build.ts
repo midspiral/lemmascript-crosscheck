@@ -36,6 +36,7 @@ function findPackageRoot(from: string): string {
 export async function compileVerifiedDafny(
   artifact: string,
   expectedHash: string,
+  dafnyVersion: string,
   timeoutMs = 180_000,
 ): Promise<CompiledModel> {
   const text = await readFile(artifact, "utf8");
@@ -43,7 +44,7 @@ export async function compileVerifiedDafny(
   if (artifactHash !== expectedHash) throw new Error("verified Dafny artifact changed before compilation");
 
   const bignumber = createRequire(import.meta.url).resolve("bignumber.js");
-  const key = createHash("sha256").update(text).update("\0").update(bignumber).digest("hex").slice(0, 20);
+  const key = dafnyBuildCacheKey(text, bignumber, dafnyVersion);
   const cache = process.env.LEMMASCRIPT_CROSSCHECK_BUILD_CACHE
     ? path.resolve(process.env.LEMMASCRIPT_CROSSCHECK_BUILD_CACHE)
     : path.join(tmpdir(), "lemmascript-crosscheck-build");
@@ -72,6 +73,14 @@ export async function compileVerifiedDafny(
   await writeFile(modulePath, generated);
   if (await hashFile(artifact) !== expectedHash) throw new Error("verified Dafny artifact changed during compilation");
   return { modulePath, artifactHash };
+}
+
+export function dafnyBuildCacheKey(artifact: string, bignumber: string, dafnyVersion: string): string {
+  return createHash("sha256")
+    .update(artifact).update("\0")
+    .update(bignumber).update("\0")
+    .update(dafnyVersion)
+    .digest("hex").slice(0, 20);
 }
 
 export function runtimePackageRoot(): string {

@@ -51,7 +51,7 @@ export function encode(value: unknown): Encoded {
   if (typeof value === "object") {
     return {
       $: "object",
-      entries: Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+      entries: Object.entries(value).sort(([a], [b]) => compareCodePoints(a, b))
         .map(([key, entry]) => [key, encode(entry)]),
     };
   }
@@ -87,6 +87,21 @@ export function stableKey(value: unknown): string {
 
 export function encodedEqual(left: Encoded, right: Encoded): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function compareCodePoints(left: string, right: string): number {
+  const leftPoints = left[Symbol.iterator]();
+  const rightPoints = right[Symbol.iterator]();
+  while (true) {
+    const leftPoint = leftPoints.next();
+    const rightPoint = rightPoints.next();
+    if (leftPoint.done || rightPoint.done) {
+      return leftPoint.done === rightPoint.done ? 0 : leftPoint.done ? -1 : 1;
+    }
+    const leftValue = leftPoint.value.codePointAt(0)!;
+    const rightValue = rightPoint.value.codePointAt(0)!;
+    if (leftValue !== rightValue) return leftValue < rightValue ? -1 : 1;
+  }
 }
 
 export function formatValue(value: unknown): string {

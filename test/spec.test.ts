@@ -37,3 +37,40 @@ test("preconditions can call a compiled model predicate", async () => {
   const accepted = await satisfiesPreconditions(called, [[3n]], [], async (name, args) => name === "sorted" && (args[0] as bigint[]).length === 1);
   assert.equal(accepted, true);
 });
+
+test("tag matches read the declared discriminant field only", async () => {
+  const tagged: TypedFunction = {
+    ...fn,
+    name: "area",
+    params: [{ name: "shape", ty: { kind: "user", name: "Shape" }, tsType: "Shape" }],
+    requires: [{
+      kind: "tagMatch",
+      typeName: "Shape",
+      scrutinee: { kind: "var", name: "shape", ty: { kind: "user", name: "Shape" } },
+      cases: [
+        { variant: "square", body: { kind: "bool", value: false } },
+        { variant: "circle", body: { kind: "bool", value: true } },
+      ],
+      fallthrough: { kind: "bool", value: false },
+      ty: { kind: "bool" },
+    }],
+  };
+  const declarations = [{
+    name: "Shape",
+    kind: "discriminated-union" as const,
+    discriminant: "kind",
+    variants: [
+      { name: "circle", fields: [{ name: "label", tsType: "string", type: { kind: "string" as const } }] },
+      { name: "square", fields: [{ name: "label", tsType: "string", type: { kind: "string" as const } }] },
+    ],
+  }];
+
+  const accepted = await satisfiesPreconditions(
+    tagged,
+    [{ kind: "circle", label: "square" }],
+    [],
+    async () => { throw new Error("unexpected call"); },
+    declarations,
+  );
+  assert.equal(accepted, true);
+});

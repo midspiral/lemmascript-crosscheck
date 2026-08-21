@@ -31,7 +31,7 @@ function renderTarget(target: TargetReport, report: AuditReport): string {
     target.reason ?? "Crosscheck could not complete this target.",
     "",
     "Next step",
-    `  ${target.nextStep ?? "Run with --debug for more information."}`,
+    `  ${target.nextStep ?? "Resolve the reported failure and rerun the audit."}`,
   ].join("\n");
 }
 
@@ -58,7 +58,7 @@ function renderIssue(target: TargetReport, issue: Issue, report: AuditReport): s
     } else if (issue.category === "runtime-timeout") {
       lines.push("", "Result", `  verified    ${issue.modelResult}`, "  JavaScript  <timeout>");
     } else if (issue.category === "console-output") {
-      lines.push("", "Console", ...(issue.console ?? []).map(entry => `  ${entry}`));
+      lines.push("", "Output", ...(issue.console ?? []).map(entry => `  ${entry}`));
     } else {
       const actual = formatValue(decode(issue.runtimeResult!));
       const exact = issue.runtimeExact && issue.runtimeExact !== actual ? ` (exactly ${issue.runtimeExact})` : "";

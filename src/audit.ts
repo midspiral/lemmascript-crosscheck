@@ -49,6 +49,7 @@ interface CaseOutcome {
   failure?: RuntimeEncodingFailure;
   issue?: ExecutedIssue;
   reason?: string;
+  nextStep?: string;
 }
 
 export async function auditFile(source: string, options: AuditOptions): Promise<AuditReport> {
@@ -58,7 +59,12 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
     throw new Error(`source changed since replay ${options.replay.id} was recorded`);
   }
   options.progress?.("compiling the verified Dafny model");
-  const compiled = await compileVerifiedDafny(verified.artifact, verified.artifactHash, options.verifyTimeoutMs);
+  const compiled = await compileVerifiedDafny(
+    verified.artifact,
+    verified.artifactHash,
+    verified.dafnyVersion,
+    options.verifyTimeoutMs,
+  );
   const runtime = path.resolve(options.runtime ?? verified.source);
   const provenance: Provenance = {
     source: verified.source,
@@ -91,7 +97,7 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
   }
 }
 
-async function auditTarget(
+export async function auditTarget(
   fn: TypedFunction,
   info: TypedInfo,
   source: string,
@@ -109,7 +115,7 @@ async function auditTarget(
     : candidateCases(fn, info, options.cases, options.seed);
   let checked = 0;
   let domainWitness: DomainWitness | undefined;
-  let preconditionUnsupported: string | undefined;
+  let incomplete: { reason: string; nextStep: string } | undefined;
 
   const evaluate = async (args: unknown[], runtimeOverride?: unknown[], presencePath?: string): Promise<CaseOutcome> => {
     let valid: boolean;
@@ -124,14 +130,26 @@ async function auditTarget(
           returnTy: callee.returnTy,
           args: encode(callArgs),
         }, options.timeoutMs);
-        if (response.status !== "ok") throw new SpecUnsupported(`model function ${name} failed: ${String(response.error ?? response.status)}`);
+        if (response.status !== "ok") throw new Error(`verified precondition model function ${name} failed: ${String(response.error ?? response.status)}`);
         if (!("modelValue" in response)) throw new SpecUnsupported(`model function ${name} returned a value the bridge cannot decode`);
         return decode(response.modelValue as Encoded);
-      });
+      }, info.typeDecls);
     } catch (error) {
-      if (error instanceof SpecUnsupported) return { kind: "not-checked", reason: error.reason };
-      if (error instanceof WorkerTimeoutError) return { kind: "not-checked", reason: "the verified precondition model timed out" };
-      return { kind: "not-checked", reason: error instanceof Error ? error.message : String(error) };
+      if (error instanceof SpecUnsupported) return {
+        kind: "not-checked",
+        reason: `precondition semantics are unsupported: ${error.reason}`,
+        nextStep: "Extend the typed precondition evaluator before drawing a compatibility conclusion.",
+      };
+      if (error instanceof WorkerTimeoutError) return {
+        kind: "not-checked",
+        reason: "the verified precondition model timed out",
+        nextStep: "Increase --timeout or simplify the verified predicate used by the precondition.",
+      };
+      return {
+        kind: "not-checked",
+        reason: `could not evaluate the verified precondition: ${error instanceof Error ? error.message : String(error)}`,
+        nextStep: "Fix the verified precondition model failure before drawing a compatibility conclusion.",
+      };
     }
     if (!valid) return { kind: "invalid" };
 
@@ -150,12 +168,33 @@ async function auditTarget(
         const model = await callModel(workers, fn, info, args, options.timeoutMs);
         return model.status === "ok"
           ? { kind: "issue", issue: { category: "runtime-timeout", args, modelResult: String(model.modelDisplay) } }
-          : { kind: "not-checked", reason: `runtime and model could not be compared after timeout: ${String(model.error ?? model.status)}` };
+          : {
+              kind: "not-checked",
+              reason: `runtime and model could not be compared after timeout: ${String(model.error ?? model.status)}`,
+              nextStep: "Fix the model execution failure, then rerun the timeout comparison.",
+            };
       }
-      return { kind: "not-checked", reason: error instanceof Error ? error.message : String(error) };
+      return {
+        kind: "not-checked",
+        reason: `runtime worker failed: ${error instanceof Error ? error.message : String(error)}`,
+        nextStep: "Fix the runtime worker failure and rerun the audit.",
+      };
     }
-    if (runtimeResponse.status === "unsupported") return { kind: "not-checked", reason: String(runtimeResponse.reason ?? "runtime target is unsupported") };
-    if (runtimeResponse.status === "error") return { kind: "not-checked", reason: String(runtimeResponse.error ?? "runtime worker failed") };
+    if (runtimeResponse.status === "unsupported") return {
+      kind: "not-checked",
+      reason: String(runtimeResponse.reason ?? "runtime target is unsupported"),
+      nextStep: "Use a supported synchronous runtime target.",
+    };
+    if (runtimeResponse.status === "error") {
+      const missingExport = runtimeResponse.kind === "missing-export";
+      return {
+        kind: "not-checked",
+        reason: String(runtimeResponse.error ?? "runtime worker failed"),
+        nextStep: missingExport
+          ? `Export ${runtimeTarget} from the runtime module, or correct the mapping with --entry ${fn.name}=<export>.`
+          : "Fix the runtime module failure and rerun the audit.",
+      };
+    }
     if (runtimeResponse.status === "threw") {
       const model = await callModel(workers, fn, info, args, options.timeoutMs);
       return model.status === "ok"
@@ -171,11 +210,19 @@ async function auditTarget(
               output: runtimeResponse.console as string[],
             },
           }
-        : { kind: "not-checked", reason: `runtime and model both failed: ${String(model.error ?? model.status)}` };
+        : {
+            kind: "not-checked",
+            reason: `runtime and model both failed: ${String(model.error ?? model.status)}`,
+            nextStep: "Fix the verified model execution failure before comparing the runtime exception.",
+          };
     }
 
     const model = await callModel(workers, fn, info, args, options.timeoutMs, runtimeResponse.result as Encoded);
-    if (model.status !== "ok") return { kind: "not-checked", reason: `verified model failed: ${String(model.error ?? model.status)}` };
+    if (model.status !== "ok") return {
+      kind: "not-checked",
+      reason: `verified model failed: ${String(model.error ?? model.status)}`,
+      nextStep: "Fix the verified model execution failure before drawing a compatibility conclusion.",
+    };
     const common = {
       args,
       modelResult: String(model.modelDisplay),
@@ -217,7 +264,10 @@ async function auditTarget(
     const outcome = await evaluate(args, replayRuntimeArgs, options.replay?.presencePath);
     if (outcome.kind === "invalid") continue;
     if (outcome.kind === "not-checked") {
-      preconditionUnsupported = outcome.reason;
+      incomplete = {
+        reason: outcome.reason ?? "Crosscheck could not complete this target.",
+        nextStep: outcome.nextStep ?? "Resolve the reported failure and rerun the audit.",
+      };
       break;
     }
     if (outcome.kind === "unrepresentable") {
@@ -239,12 +289,15 @@ async function auditTarget(
       }
     }
     if (selectedOutcome.kind === "not-checked") {
-      preconditionUnsupported = selectedOutcome.reason;
+      incomplete = {
+        reason: selectedOutcome.reason ?? "Crosscheck could not complete this target.",
+        nextStep: selectedOutcome.nextStep ?? "Resolve the reported failure and rerun the audit.",
+      };
       break;
     }
     if (selectedOutcome.kind === "issue") {
       const original = selectedOutcome.issue!;
-      const canShrink = original.category !== "optional-presence";
+      const canShrink = original.category !== "optional-presence" && original.category !== "runtime-timeout";
       const minimized = options.replay || !canShrink ? original.args : await shrinkArgs(original.args, async candidate => {
         const result = await evaluate(candidate);
         return result.kind === "issue" && result.issue?.category === original.category;
@@ -254,13 +307,13 @@ async function auditTarget(
     }
   }
 
-  if (preconditionUnsupported) {
+  if (incomplete) {
     return notChecked(
       fn.name,
       runtimeTarget,
       options,
-      `precondition semantics are unsupported: ${preconditionUnsupported}`,
-      "Extend the typed precondition evaluator before drawing a compatibility conclusion.",
+      incomplete.reason,
+      incomplete.nextStep,
       checked,
     );
   }
@@ -440,7 +493,7 @@ function issueLanguage(category: Exclude<IssueCategory, "input-domain">, returnT
     resolution: "Canonicalize optional records at the boundary, or extend the formal representation to track property presence.",
   };
   if (category === "console-output") return {
-    summary: "JavaScript produces console output absent from the verified model",
+    summary: "JavaScript produces output absent from the verified model",
     diagnosis: "The runtime emitted an observable effect that the functional model does not contain.",
     resolution: "Remove the effect, or model it explicitly before crosschecking this target.",
   };

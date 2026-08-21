@@ -13,16 +13,14 @@ class Rng {
   private state: number;
 
   constructor(seed: number) {
-    this.state = seed >>> 0 || 0x9e3779b9;
+    this.state = seed >>> 0;
   }
 
   next(): number {
-    let value = this.state;
-    value ^= value << 13;
-    value ^= value >>> 17;
-    value ^= value << 5;
-    this.state = value >>> 0;
-    return this.state / 0x1_0000_0000;
+    let value = this.state = (this.state + 0x6d2b79f5) >>> 0;
+    value = Math.imul(value ^ value >>> 15, value | 1);
+    value ^= value + Math.imul(value ^ value >>> 7, value | 61);
+    return ((value ^ value >>> 14) >>> 0) / 0x1_0000_0000;
   }
 
   int(min: number, max: number): number {
@@ -86,7 +84,7 @@ export function edgeValues(ty: Ty, context: GenerationContext): unknown[] {
     case "bool": return [false, true];
     case "int": {
       const values = integerEdges(false);
-      return ty.big ? values : values;
+      return values;
     }
     case "nat": return integerEdges(true);
     case "real":
@@ -224,16 +222,21 @@ function userEdges(name: string, outer: GenerationContext): unknown[] {
       return output;
     }
     case "discriminated-union": {
-      if (declaration.discriminant === "__isArray__") {
+      const discriminant = declaration.discriminant;
+      if (!discriminant) return [];
+      if (discriminant === "__isArray__") {
         return (declaration.variants ?? []).flatMap(variant => {
           const field = variant.fields[0];
           return field?.type ? edgeValues(field.type, context).slice(0, 4) : [];
         });
       }
-      return (declaration.variants ?? []).map(variant => Object.fromEntries(variant.fields.map(field => [
-        field.name,
-        field.name === declaration.discriminant ? variant.name : field.type ? baselineValue(field.type, context) : undefined,
-      ])));
+      return (declaration.variants ?? []).map(variant => Object.fromEntries([
+        [discriminant, variant.name],
+        ...variant.fields.filter(field => field.name !== discriminant).map(field => [
+          field.name,
+          field.type ? baselineValue(field.type, context) : undefined,
+        ]),
+      ]));
     }
     case "opaque": return [];
   }
@@ -254,15 +257,20 @@ function randomUser(name: string, outer: GenerationContext, rng: Rng, depth: num
     ]));
     case "discriminated-union": {
       const variant = rng.pick(declaration.variants ?? []);
-      if (declaration.discriminant === "__isArray__") {
+      const discriminant = declaration.discriminant;
+      if (!discriminant) throw new Error(`union ${name} has no discriminant`);
+      if (discriminant === "__isArray__") {
         const field = variant.fields[0];
         if (!field?.type) throw new Error(`variant ${variant.name} has no payload`);
         return randomValue(field.type, context, rng, depth);
       }
-      return Object.fromEntries(variant.fields.map(field => [
-        field.name,
-        field.name === declaration.discriminant ? variant.name : field.type ? randomValue(field.type, context, rng, depth) : undefined,
-      ]));
+      return Object.fromEntries([
+        [discriminant, variant.name],
+        ...variant.fields.filter(field => field.name !== discriminant).map(field => [
+          field.name,
+          field.type ? randomValue(field.type, context, rng, depth) : undefined,
+        ]),
+      ]);
     }
     case "opaque": throw new Error(`cannot generate opaque type ${name}`);
   }

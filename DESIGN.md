@@ -112,7 +112,7 @@ The verified artifact is the adjacent `<source-base>.dfy` file produced and chec
 
 The Dafny artifact is compiled to JavaScript with `dafny build -t js --no-verify`. Skipping verification at this stage is safe only within the preceding protocol: LemmaScript has already verified the artifact, Crosscheck checks the expected hash before compilation, and it checks the hash again afterward.
 
-Compiled models are cached by the artifact contents and the resolved `bignumber.js` dependency. Crosscheck patches the generated dependency path and exposes the Dafny runtime/module objects needed by the model worker. An unexpected Dafny output shape is a hard failure rather than a best-effort load.
+Compiled models are cached by the artifact contents, the exact Dafny version, and the resolved `bignumber.js` dependency. Crosscheck patches the generated dependency path and exposes the Dafny runtime/module objects needed by the model worker. An unexpected Dafny output shape is a hard failure rather than a best-effort load.
 
 ### 3. Select targets and runtime exports
 
@@ -160,12 +160,15 @@ The runtime worker loads TypeScript through `tsx`, calls the selected export syn
 - the returned value;
 - encoded arguments before and after the call;
 - `console.log`, `info`, `debug`, `warn`, and `error` output;
+- direct `process.stdout.write` output during the call;
 - a thrown exception; or
 - a returned promise, which is reported as unsupported async behavior.
 
 The model worker marshals the same exact arguments into the compiled Dafny model. When a runtime result exists, it also converts that result into the corresponding formal value and performs exact equality in model space.
 
-Each worker request has the `--timeout` deadline. A timed-out worker is killed. If the verified model returns for the same input, runtime timeout is a concrete issue; if a comparison cannot be completed, the target is `NOT CHECKED`.
+Each worker request has the `--timeout` deadline. A timed-out worker is killed and recreated with its original setup before the next request, so one timeout cannot poison later targets or model calls. If the verified model returns for the same input, runtime timeout is a concrete issue; if a comparison cannot be completed, the target is `NOT CHECKED`.
+
+The worker redirects module-import output away from its JSON-lines protocol. During a runtime call, console methods and direct standard-output writes are captured as observable output.
 
 ### 6. Compare observable behavior
 
@@ -175,7 +178,7 @@ For a proof-valid representable input (m), the central relation is:
 decode(runtime(encode(m))) = verifiedModel(m)
 ```
 
-Crosscheck also compares encoded arguments before and after the call and checks captured console output. The implemented issue categories are:
+Crosscheck also compares encoded arguments before and after the call and checks captured output. The implemented issue categories are:
 
 | Category | Meaning |
 | --- | --- |
@@ -193,9 +196,9 @@ The current engine reports the first concrete issue found for each target. If no
 
 ### 7. Shrink and persist failures
 
-Executable and input-domain witnesses are reduced by a deterministic, type-directed shrinker. Candidate reductions are retained only while the same issue relation continues to fail. Integers move toward zero and semantic boundaries; rationals, strings, arrays, tuples, and records receive structural reductions.
+Executable and input-domain witnesses are reduced by a deterministic, type-directed shrinker. Candidate reductions are retained only while the same issue relation continues to fail. Integers move toward zero and semantic boundaries; rationals, strings, arrays, tuples, and records receive structural reductions. Optional-presence probes retain their paired runtime representation, and runtime-timeout findings retain the input that actually crossed the deadline instead of probing a worker that was just killed.
 
-The minimized witness is replayed before reporting. Its issue ID is the first ten hexadecimal characters of a SHA-256 digest over the target, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity.
+Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the target, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity.
 
 Saved cases record the source path and hash, target, runtime export, issue category, arguments, and any representation variant. Replay refuses to run if the source hash has changed.
 
@@ -305,7 +308,7 @@ The v0.1.0 implementation intentionally has a narrower contract than the long-te
 - `havoc`, `assume`, and autohavoc targets are not compared;
 - the typed precondition evaluator supports a finite expression subset;
 - successful parameterized audits are sampled, never universally proved;
-- observed effects are limited to argument mutation, console output, throws, promises, and deadlines;
+- observed effects are limited to argument mutation, console and standard output, throws, promises, and deadlines;
 - ambient state, global mutation, filesystem/network effects, and nondeterminism are not modeled;
 - arbitrary invalid JavaScript inputs and boundary enforcement are not tested;
 - there are no per-operation transfer certificates or `PROVED` conclusion; and
@@ -313,7 +316,7 @@ The v0.1.0 implementation intentionally has a narrower contract than the long-te
 
 ## Tests and release checks
 
-Unit tests cover exact numeric representation, candidate generation, optional presence, rational arithmetic, typed preconditions, shrinking, and report wording. The standard validation sequence is:
+Unit tests cover exact numeric representation, candidate generation, optional presence, rational arithmetic, typed preconditions, shrinking, worker recovery and protocol isolation, audit-loop failure classification, stable encoding, and report wording. The standard validation sequence is:
 
 ```sh
 npm run typecheck

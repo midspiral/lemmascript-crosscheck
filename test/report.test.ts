@@ -60,3 +60,15 @@ test("present undefined is not rendered as an omitted object property", () => {
   }, { details: false });
   assert.match(rendered, /JavaScript\s+\{ retries: <present undefined> \}/);
 });
+
+test("the not-checked fallback suggests an available action", () => {
+  const rendered = renderReport({
+    schema: "lemmascript-crosscheck.report/v1",
+    targets: [{
+      target: "search", runtimeTarget: "search", conclusion: "not-checked",
+      evidence: "tool-failure", cases: 0, seed: 17, reason: "worker failed",
+    }],
+  }, { details: false });
+  assert.doesNotMatch(rendered, /--debug/);
+  assert.match(rendered, /Resolve the reported failure and rerun the audit/);
+});

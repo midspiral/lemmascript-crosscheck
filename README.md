@@ -10,7 +10,7 @@ LemmaScript source ──verify──> compiled Dafny model
         └──── execute in Node ──────┴── compare results and effects
 ```
 
-Crosscheck generates proof-valid inputs, runs the verified model and the JavaScript export in isolated workers, and compares their observable behavior. When they disagree, it shrinks the input and saves a deterministic replay case.
+Crosscheck generates proof-valid inputs, runs the verified model and the JavaScript export in isolated workers, and compares their observable behavior. When they disagree, it shrinks the input when appropriate and saves a deterministic replay case.
 
 It currently finds:
 
@@ -19,7 +19,7 @@ It currently finds:
 - ordinary result mismatches;
 - caller-visible input mutation;
 - omitted properties versus properties set to `undefined`;
-- unexpected console output, exceptions, and timeouts.
+- unexpected console or standard output, exceptions, and timeouts.
 
 ## Status
 
@@ -240,8 +240,8 @@ For each selected target, Crosscheck:
 3. generates exact formal values and retains inputs satisfying the verified preconditions;
 4. checks whether those values can be represented by the TypeScript signature;
 5. executes the model and runtime in separate workers;
-6. compares exact results, argument mutation, console output, exceptions, and termination;
-7. shrinks and replays the first mismatch before reporting it.
+6. compares exact results, argument mutation, console and standard output, exceptions, and termination;
+7. shrinks and replays the first mismatch when appropriate, then saves a deterministic replay case.
 
 This independently tests transfer from the verified formal semantics to the executable JavaScript semantics. It does not replace LemmaScript's proof or prove the translator correct.
 

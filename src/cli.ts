@@ -7,6 +7,7 @@ import { loadCase } from "./cases.js";
 import { conciseCommandError } from "./command.js";
 import { runtimePackageRoot } from "./dafny-build.js";
 import { exitCode, renderFatal, renderReport } from "./report.js";
+import type { AuditReport } from "./report-types.js";
 
 interface CliOptions {
   source?: string;
@@ -90,7 +91,21 @@ async function main(): Promise<void> {
     clearProgress();
     const message = conciseCommandError(error);
     if (parsed.json) {
-      process.stdout.write(`${JSON.stringify({ schema: "lemmascript-crosscheck.report/v1", targets: [{ target: path.basename(source), conclusion: "not-checked", evidence: "tool-failure", reason: message }] }, null, 2)}\n`);
+      const target = parsed.only ?? path.basename(source);
+      const report: AuditReport = {
+        schema: "lemmascript-crosscheck.report/v1",
+        targets: [{
+          target,
+          runtimeTarget: parsed.entries.get(target) ?? target,
+          conclusion: "not-checked",
+          evidence: "tool-failure",
+          cases: 0,
+          seed: parsed.seed,
+          reason: message,
+          nextStep: "Resolve the reported failure and rerun the audit.",
+        }],
+      };
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     } else {
       process.stdout.write(`${renderFatal(path.basename(source), message)}\n`);
     }

@@ -1,4 +1,5 @@
-import type { TExpr, Ty, TypedConst, TypedFunction } from "./ir.js";
+import { compareCodePoints } from "./codec.js";
+import type { TExpr, Ty, TypeDeclInfo, TypedConst, TypedFunction } from "./ir.js";
 import { Rational, asRational } from "./rational.js";
 
 export class SpecUnsupported extends Error {
@@ -11,6 +12,7 @@ export class SpecUnsupported extends Error {
 export interface SpecContext {
   env: ReadonlyMap<string, unknown>;
   constants: ReadonlyMap<string, TypedConst>;
+  declarations: ReadonlyMap<string, TypeDeclInfo>;
   callModel(name: string, args: unknown[]): Promise<unknown>;
 }
 
@@ -19,9 +21,15 @@ export async function satisfiesPreconditions(
   args: unknown[],
   constants: readonly TypedConst[],
   callModel: SpecContext["callModel"],
+  declarations: readonly TypeDeclInfo[] = [],
 ): Promise<boolean> {
   const env = new Map(fn.params.map((param, index) => [param.name, args[index]]));
-  const context: SpecContext = { env, constants: new Map(constants.map(constant => [constant.name, constant])), callModel };
+  const context: SpecContext = {
+    env,
+    constants: new Map(constants.map(constant => [constant.name, constant])),
+    declarations: new Map(declarations.map(declaration => [declaration.name, declaration])),
+    callModel,
+  };
   for (const clause of fn.requires) {
     if (await evaluateSpec(clause, context) !== true) return false;
   }
@@ -85,9 +93,21 @@ export async function evaluateSpec(expr: TExpr, context: SpecContext): Promise<u
     }
     case "tagMatch": {
       const value = await evaluateSpec(expr.scrutinee as TExpr, context);
-      if (!value || typeof value !== "object") throw new SpecUnsupported("tag match value is not a record");
+      const typeName = String(expr.typeName);
+      const declaration = context.declarations.get(typeName);
+      if (!declaration?.discriminant) throw new SpecUnsupported(`tag match type ${typeName} has no discriminant metadata`);
+      let selectedVariant: unknown;
+      if (declaration.discriminant === "__isArray__") {
+        selectedVariant = Array.isArray(value) ? "ArrayBranch" : "NonArrayBranch";
+      } else {
+        if (!value || typeof value !== "object") throw new SpecUnsupported("tag match value is not a record");
+        selectedVariant = (value as Record<string, unknown>)[declaration.discriminant];
+      }
+      const selectedName = selectedVariant === undefined
+        ? undefined
+        : typeof selectedVariant === "string" ? selectedVariant : String(selectedVariant);
       for (const branch of expr.cases as { variant: string; body: TExpr }[]) {
-        if (Object.values(value).includes(branch.variant)) return await evaluateSpec(branch.body, context);
+        if (selectedName === branch.variant) return await evaluateSpec(branch.body, context);
       }
       if (expr.fallthrough) return await evaluateSpec(expr.fallthrough as TExpr, context);
       throw new SpecUnsupported("tag match has no matching branch");
@@ -229,8 +249,8 @@ function modelEqual(left: unknown, right: unknown): boolean {
     return left.size === right.size && [...left].every(([key, value]) => [...right].some(([otherKey, otherValue]) => modelEqual(key, otherKey) && modelEqual(value, otherValue)));
   }
   if (left && right && typeof left === "object" && typeof right === "object") {
-    const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
-    const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
+    const leftEntries = Object.entries(left).sort(([a], [b]) => compareCodePoints(a, b));
+    const rightEntries = Object.entries(right).sort(([a], [b]) => compareCodePoints(a, b));
     return leftEntries.length === rightEntries.length
       && leftEntries.every(([key, value], index) => key === rightEntries[index]?.[0] && modelEqual(value, rightEntries[index]?.[1]));
   }
