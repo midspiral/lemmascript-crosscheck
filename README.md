@@ -25,13 +25,47 @@ It currently finds:
 
 This is an early Dafny-only implementation. It requires LemmaScript 0.6.x and audits synchronous, exported targets with supported value types. A `NO ISSUE FOUND` result over sampled inputs is evidence within the displayed case count and seed; it is not a proof that the verified model and JavaScript agree for every input.
 
-## Prerequisites
+## Installation
 
-- Node.js 20 or newer
-- LemmaScript 0.6.x, either as `lsc` on `PATH` or in a local checkout
-- Dafny 4.x as `dafny` on `PATH`
+Crosscheck requires:
 
-The examples below assume this repository and LemmaScript are sibling checkouts:
+- Node.js 22 or newer;
+- LemmaScript 0.6.x, either installed so `lsc` is on `PATH` or available as a local Git clone selected with `LEMMASCRIPT`; and
+- Dafny 4.11.x as `dafny` on `PATH`.
+
+Install the two npm CLIs globally:
+
+```sh
+npm install --global lemmascript@^0.6.0 lemmascript-crosscheck
+lemmascript-crosscheck --version
+```
+
+Or add them to a project and run Crosscheck through `npx`:
+
+```sh
+npm install --save-dev lemmascript@^0.6.0 lemmascript-crosscheck
+npx lemmascript-crosscheck path/to/file.ts
+```
+
+LemmaScript is an optional peer dependency because Crosscheck can use either the npm-installed CLI or a local clone of the LemmaScript repository. Dafny is an external tool and must be installed separately. Crosscheck checks both tool versions before running an audit.
+
+## Quick start
+
+Audit a verified source file directly:
+
+```sh
+lemmascript-crosscheck path/to/file.ts --only exportedFunction --cases 40
+```
+
+An audit performs a normal LemmaScript check, so it may refresh generated Dafny sidecars next to the source before Crosscheck executes the model.
+
+## Using a LemmaScript source checkout
+
+A source checkout is a local Git clone of the LemmaScript repository, containing its source code and development tools. It is different from installing the published `lemmascript` package from npm. Use a checkout when developing LemmaScript itself, testing unpublished LemmaScript changes, or running the examples stored in its repository.
+
+Set `LEMMASCRIPT` to the root of that clone—the directory containing LemmaScript's `package.json` and `tools/` directory. Crosscheck will run the development `lsc` from there instead of looking for an installed `lsc` on `PATH`. Run `npm install` in the LemmaScript checkout first so its development dependencies are available.
+
+The sample runs below use sibling Crosscheck and LemmaScript checkouts:
 
 ```text
 parent/
@@ -39,26 +73,17 @@ parent/
 └── lemmascript-crosscheck/
 ```
 
-## Quick start
-
-Install dependencies and build the CLI:
+Install dependencies, build the CLI, and audit LemmaScript's `arraySum` example:
 
 ```sh
 npm install
 npm run build
-```
-
-Then audit the `arraySum` example against its verified model:
-
-```sh
 LEMMASCRIPT=../LemmaScript \
   node dist/src/cli.js ../LemmaScript/examples/arraySum.ts \
   --only arraySum --cases 40
 ```
 
-`LEMMASCRIPT` points to a source checkout and makes Crosscheck invoke its development `lsc`. Leave it unset when a compatible `lsc` is already installed. When this package is installed as a CLI, `lemmascript-crosscheck` replaces `node dist/src/cli.js` in every command below.
-
-An audit performs a normal LemmaScript check, so it may refresh generated Dafny sidecars next to the source before Crosscheck executes the model.
+Leave `LEMMASCRIPT` unset when LemmaScript was installed from npm and a compatible `lsc` is already on `PATH`.
 
 ## Sample runs
 

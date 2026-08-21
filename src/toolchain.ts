@@ -59,6 +59,11 @@ function compatibleVersion(version: string): boolean {
   return !!match && Number(match[1]) === 0 && Number(match[2]) === 6;
 }
 
+export function compatibleDafnyVersion(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+][^\s]+)?$/.exec(version.trim());
+  return !!match && Number(match[1]) === 4 && Number(match[2]) === 11;
+}
+
 export async function verifyAndInspect(sourcePath: string, timeoutMs = 300_000): Promise<VerifiedInput> {
   const source = path.resolve(sourcePath);
   await access(source);
@@ -82,6 +87,11 @@ export async function verifyAndInspect(sourcePath: string, timeoutMs = 300_000):
   }
   if (info.dafny.error) throw new Error(`Lemmascript could not emit Dafny metadata: ${info.dafny.error}`);
 
+  const dafnyVersion = (await runCommand({ command: "dafny", args: ["--version"], timeoutMs: 30_000 })).stdout.trim();
+  if (!compatibleDafnyVersion(dafnyVersion)) {
+    throw new Error(`Dafny ${dafnyVersion || "unknown"} is unsupported; this build requires 4.11.x`);
+  }
+
   const checked = await runLsc(["check", "--backend=dafny", source], timeoutMs);
   const sourceHashAfter = await sha256(source);
   if (sourceHashBefore !== sourceHashAfter) throw new Error("source changed while LemmaScript verification was running");
@@ -90,7 +100,6 @@ export async function verifyAndInspect(sourcePath: string, timeoutMs = 300_000):
   const artifact = path.join(path.dirname(source), `${path.basename(source, extension)}.dfy`);
   await access(artifact);
   const artifactHash = await sha256(artifact);
-  const dafnyVersion = (await runCommand({ command: "dafny", args: ["--version"], timeoutMs: 30_000 })).stdout.trim();
 
   return {
     source,

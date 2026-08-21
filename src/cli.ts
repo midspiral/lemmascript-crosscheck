@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { auditFile, type AuditOptions } from "./audit.js";
 import { loadCase } from "./cases.js";
 import { conciseCommandError } from "./command.js";
+import { runtimePackageRoot } from "./dafny-build.js";
 import { exitCode, renderFatal, renderReport } from "./report.js";
 
 interface CliOptions {
@@ -22,7 +24,15 @@ interface CliOptions {
   version: boolean;
 }
 
-const VERSION = "0.1.0";
+const VERSION = packageVersion();
+
+function packageVersion(): string {
+  const manifest = JSON.parse(readFileSync(path.join(runtimePackageRoot(), "package.json"), "utf8")) as { version?: unknown };
+  if (typeof manifest.version !== "string" || manifest.version.length === 0) {
+    throw new Error("lemmascript-crosscheck package.json has no version");
+  }
+  return manifest.version;
+}
 
 async function main(): Promise<void> {
   let parsed: CliOptions;

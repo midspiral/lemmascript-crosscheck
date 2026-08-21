@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Node.js ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify packed CLI
+        shell: bash
+        run: |
+          package_tarball="$(npm pack --pack-destination "$RUNNER_TEMP")"
+          tar -tf "$RUNNER_TEMP/$package_tarball" | grep -qx 'package/dist/src/cli.js'
+          if tar -tf "$RUNNER_TEMP/$package_tarball" | grep -q '^package/dist/test/'; then
+            echo "Compiled tests leaked into the npm package."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init --yes
+          npm install --no-audit --no-fund "$RUNNER_TEMP/$package_tarball"
+
+          expected_version="$(node -p "require('./node_modules/lemmascript-crosscheck/package.json').version")"
+          actual_version="$(./node_modules/.bin/lemmascript-crosscheck --version)"
+          test "$actual_version" = "$expected_version"
+          ./node_modules/.bin/lemmascript-crosscheck --help | grep -q '^Usage:'

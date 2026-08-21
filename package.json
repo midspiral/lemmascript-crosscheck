@@ -2,19 +2,37 @@
   "name": "lemmascript-crosscheck",
   "version": "0.1.0",
   "description": "Counterexample-driven runtime transfer checking for LemmaScript",
+  "keywords": [
+    "lemmascript",
+    "dafny",
+    "formal-verification",
+    "property-testing",
+    "crosscheck"
+  ],
+  "homepage": "https://github.com/midspiral/lemmascript-crosscheck#readme",
+  "bugs": {
+    "url": "https://github.com/midspiral/lemmascript-crosscheck/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/midspiral/lemmascript-crosscheck.git"
+  },
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "bin": {
     "lemmascript-crosscheck": "dist/src/cli.js"
   },
   "files": [
-    "dist",
+    "dist/src",
     "README.md",
     "DESIGN.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -26,7 +44,7 @@
     "tsx": "^4.22.4"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
   "peerDependencies": {

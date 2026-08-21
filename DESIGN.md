@@ -91,7 +91,7 @@ The main implementation components are:
 
 ### 1. Verify and identify the source
 
-Crosscheck resolves the source path and hashes it before invoking LemmaScript. It accepts LemmaScript 0.6.x typed-info schema 1.
+Crosscheck resolves the source path and hashes it before invoking LemmaScript. It accepts LemmaScript 0.6.x typed-info schema 1 and Dafny 4.11.x. Other tool release lines fail before verification so that model compilation is reproducible against the supported toolchain.
 
 When `LEMMASCRIPT` names a checkout, Crosscheck runs that checkout's `tools/src/lsc.ts` through `tsx`. Otherwise it invokes `lsc` from `PATH`.
 
@@ -100,8 +100,8 @@ The verification adapter performs:
 ```text
 lsc version
 lsc info --typed <source>
-lsc check --backend=dafny <source>
 dafny --version
+lsc check --backend=dafny <source>
 ```
 
 Lean-backed sources are rejected because the executable model runner currently supports Dafny only. After verification, Crosscheck hashes the source again and stops if it changed during the check.
@@ -298,7 +298,7 @@ Crosscheck imports and executes the runtime module. Child-process separation and
 
 The v0.1.0 implementation intentionally has a narrower contract than the long-term design:
 
-- only Dafny-backed LemmaScript 0.6.x sources are supported;
+- only Dafny-backed LemmaScript 0.6.x sources running with Dafny 4.11.x are supported;
 - the CLI accepts one source file, not a directory or project;
 - targets must be synchronous, exported, non-generic functions;
 - generic, recursive, opaque, function-typed, unknown, and `void` value shapes are unsupported;
@@ -321,6 +321,8 @@ npm test
 npm run build
 npm pack --dry-run
 ```
+
+Continuous integration runs this sequence on Node.js 22 and 24. It also installs the generated tarball into an empty project, confirms that the packaged CLI reports the manifest version and renders help, and rejects tarballs containing compiled tests.
 
 End-to-end regression fixtures live in the adjacent LemmaScript repository. The important behaviors are:
 

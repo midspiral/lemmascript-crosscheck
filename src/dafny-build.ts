@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,15 @@ const packageRoot = findPackageRoot(path.dirname(fileURLToPath(import.meta.url))
 function findPackageRoot(from: string): string {
   let directory = from;
   while (true) {
-    if (existsSync(path.join(directory, "package.json")) && existsSync(path.join(directory, "node_modules"))) return directory;
+    const manifestPath = path.join(directory, "package.json");
+    if (existsSync(manifestPath)) {
+      try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { name?: unknown };
+        if (manifest.name === "lemmascript-crosscheck") return directory;
+      } catch {
+        // Keep searching when an ancestor has an unreadable or invalid manifest.
+      }
+    }
     const parent = path.dirname(directory);
     if (parent === directory) throw new Error("could not locate the lemmascript-crosscheck package root");
     directory = parent;
