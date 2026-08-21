@@ -198,9 +198,9 @@ The current engine reports the first concrete issue found for each target. If no
 
 Executable and input-domain witnesses are reduced by a deterministic, type-directed shrinker. Candidate reductions are retained only while the same issue relation continues to fail. Integers move toward zero and semantic boundaries; rationals, strings, arrays, tuples, and records receive structural reductions. Optional-presence probes retain their paired runtime representation, and runtime-timeout findings retain the input that actually crossed the deadline instead of probing a worker that was just killed.
 
-Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the target, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity.
+Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the source and runtime entry hashes, formal and runtime targets, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity. Content identity namespaces different audited code while remaining stable when byte-identical files move.
 
-Saved cases record the source path and hash, target, runtime export, issue category, arguments, and any representation variant. Replay refuses to run if the source hash has changed.
+Saved `lemmascript-crosscheck.case/v2` cases record the source and runtime entry paths and hashes, target, runtime export, issue category, arguments, and any representation variant. Replay restores the recorded runtime when none is supplied, includes alternate runtimes in generated commands, and refuses to run if either content hash has changed. An explicitly supplied module at a new path is accepted when its hash matches. Runtime identity currently covers the imported entry file, not its transitive dependencies.
 
 ## Semantic representations
 
@@ -265,7 +265,7 @@ Reporting language follows these rules:
 
 ## Determinism, provenance, and caches
 
-The report records source and artifact paths and hashes, LemmaScript and Dafny versions, and the runtime module path. Source and artifact hashes guard the transitions between verification, compilation, and replay.
+The report records source, artifact, and runtime entry paths and hashes plus the LemmaScript and Dafny versions. These hashes guard the transitions between verification, compilation, execution, and replay.
 
 Generation order, edge values, seeded random generation, shrinking order, wire encoding, and issue IDs are deterministic for the same versions and inputs. Runtime behavior and external tool behavior may still introduce nondeterminism; the current implementation does not repeatedly execute clean cases to detect it.
 

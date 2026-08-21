@@ -54,6 +54,7 @@ export interface Provenance {
   lemmascript: string;
   dafny: string;
   runtime: string;
+  runtimeSha256: string;
 }
 
 export interface AuditReport {

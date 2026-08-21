@@ -44,6 +44,13 @@ const options: AuditOptions = {
   saveCases: false,
 };
 
+const identity = {
+  source: "/tmp/fixture.ts",
+  sourceSha256: "1".repeat(64),
+  runtime: "/tmp/fixture.ts",
+  runtimeSha256: "1".repeat(64),
+};
+
 function client(request: JsonLineRequestClient["request"]): JsonLineRequestClient {
   return { request, close() {} };
 }
@@ -80,7 +87,7 @@ test("runtime timeout witnesses are not shrunk against a poisoned worker", async
   });
   const workers: AuditWorkers = { model: modelClient(), runtime, close() {} };
 
-  const report = await auditTarget(arrayFn, info, "/tmp/fixture.ts", "hash", workers, options);
+  const report = await auditTarget(arrayFn, info, identity, workers, options);
 
   assert.equal(report.issue?.category, "runtime-timeout");
   assert.deepEqual(decode(report.issue!.args), [[1n]]);
@@ -100,7 +107,7 @@ test("a missing runtime export is reported as a mapping failure", async () => {
     entries: new Map([[arrayFn.name, runtimeTarget]]),
   };
 
-  const report = await auditTarget(arrayFn, info, "/tmp/fixture.ts", "hash", workers, mappedOptions);
+  const report = await auditTarget(arrayFn, info, identity, workers, mappedOptions);
 
   assert.equal(report.conclusion, "not-checked");
   assert.equal(report.reason, "runtime module does not export function missing");

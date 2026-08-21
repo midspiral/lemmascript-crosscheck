@@ -91,7 +91,7 @@ Resolve
   Use bigint, or prove that every input, intermediate, and result remains exact as a JavaScript number.
 
 Replay
-  lemmascript-crosscheck /absolute/path/increment.ts --replay 78b493d32d
+  lemmascript-crosscheck /absolute/path/increment.ts --replay 58fb6d7e39
 
 Evidence: replayed counterexample · Dafny 4.11.0 model
 ```
@@ -117,10 +117,10 @@ Crosscheck starts with exact formal values. It only converts a value to a runtim
 Use the ID printed by your run:
 
 ```sh
-npx lemmascript-crosscheck increment.ts --replay 78b493d32d
+npx lemmascript-crosscheck increment.ts --replay 58fb6d7e39
 ```
 
-Crosscheck saves the minimized input, target, runtime export mapping, and source hash in its case cache. Replay verifies the source again, checks that its hash is unchanged, and executes that one recorded input instead of generating a new sample.
+Crosscheck saves the minimized input, source and runtime entry paths and hashes, target, and runtime export mapping in its case cache. Replay verifies the source again, checks that both content hashes are unchanged, and executes that one recorded input instead of generating a new sample.
 
 The default case directory is `$XDG_CACHE_HOME/lemmascript-crosscheck/cases`, or `~/.cache/lemmascript-crosscheck/cases` when `XDG_CACHE_HOME` is unset. Set `LEMMASCRIPT_CROSSCHECK_CACHE` when you want an isolated or shared cache location.
 
@@ -188,13 +188,15 @@ npx lemmascript-crosscheck src/counter.ts \
 
 The formal model and its preconditions still come from `src/counter.ts`; only the runtime worker imports `dist/api.js`. `--entry` is repeatable when several exports were renamed.
 
-When replaying a case found against an alternate runtime module, pass that module again:
+Cases found against an alternate runtime restore it automatically, and the generated replay command includes it explicitly:
 
 ```sh
 npx lemmascript-crosscheck src/counter.ts \
   --runtime dist/api.js \
   --replay <id>
 ```
+
+If the same built module moved, replace the `--runtime` path; Crosscheck accepts the relocation only when the entry file's hash still matches the recorded runtime.
 
 Runtime modules execute as code. The workers isolate them from the CLI process for failures and deadlines, but they are not security sandboxes; audit only code you trust.
 

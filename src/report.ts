@@ -66,7 +66,7 @@ function renderIssue(target: TargetReport, issue: Issue, report: AuditReport): s
     }
     lines.push("", "Cause", `  ${issue.diagnosis}`);
   }
-  lines.push("", "Resolve", `  ${issue.resolution}`, "", "Replay", `  lemmascript-crosscheck ${shellPath(report.provenance?.source ?? "source.ts")} --replay ${issue.id}`);
+  lines.push("", "Resolve", `  ${issue.resolution}`, "", "Replay", `  ${replayCommand(report, issue.id)}`);
   const backend = report.provenance ? ` · Dafny ${report.provenance.dafny} model` : "";
   lines.push("", `Evidence: replayed counterexample${backend}`);
   return lines.join("\n");
@@ -98,7 +98,7 @@ function renderSuite(report: AuditReport): string {
     lines.push(`${label.padEnd(13)}${target.target.padEnd(22)}${detail}`);
   }
   if (issues[0]?.issue) {
-    lines.push("", `Explain an issue: lemmascript-crosscheck ${shellPath(report.provenance?.source ?? "source.ts")} --replay ${issues[0].issue.id}`);
+    lines.push("", `Explain an issue: ${replayCommand(report, issues[0].issue.id)}`);
   }
   return lines.join("\n");
 }
@@ -109,6 +109,13 @@ function capitalize(text: string): string {
 
 function shellPath(value: string): string {
   return /[\s'"\\]/.test(value) ? JSON.stringify(value) : value;
+}
+
+function replayCommand(report: AuditReport, id: string): string {
+  const source = report.provenance?.source ?? "source.ts";
+  const runtime = report.provenance?.runtime;
+  const runtimeOption = runtime && runtime !== source ? ` --runtime ${shellPath(runtime)}` : "";
+  return `lemmascript-crosscheck ${shellPath(source)}${runtimeOption} --replay ${id}`;
 }
 
 export function renderFatal(source: string, message: string): string {

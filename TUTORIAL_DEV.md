@@ -8,7 +8,7 @@ It depends on whether Crosscheck already observes the fact you want to classify:
 
 | Change | Typical scope | Rough effort |
 | --- | --- | --- |
-| Classify data already in a worker response | `report-types.ts`, `audit.ts`, tests, documentation | A few focused hours |
+| Classify data already in a worker response | `report-types.ts`, `audit.ts`, `cases.ts`, tests, documentation | A few focused hours |
 | Capture a new runtime observation | Runtime worker protocol, audit engine, report shape/rendering, replay, tests | Roughly half a day to a day |
 | Add a new formal value or precondition construct | Typed metadata, generator, bridge, Dafny marshalling, evaluator, shrinker, tests | Multiple days, sometimes with a LemmaScript change |
 | Model async, concurrency, filesystem, network, or other ambient effects | Execution and semantic model redesign | Architectural work |
@@ -192,9 +192,9 @@ This ordering is product behavior. Adding a check above result comparison can hi
 
 Most executable findings use the generic shrink loop. `optional-presence` retains a paired model/runtime representation, and `runtime-timeout` is intentionally not shrunk because the timed-out worker was killed and timing is stateful. A new category must explicitly decide whether the generic relation is safe.
 
-[`src/cases.ts`](src/cases.ts) derives the ten-character ID from the target, category, and encoded witness. Saved cases include the source hash, target, runtime export, arguments, and representation variant when needed. They do not currently persist an alternate runtime module path, so a replay originally run with `--runtime` must receive that option again.
+[`src/cases.ts`](src/cases.ts) derives the ten-character ID from the source and runtime entry hashes, target and runtime export, category, and encoded witness. Saved cases include both paths and hashes plus the arguments and representation variant when needed. Replay restores the recorded runtime automatically, prints alternate runtimes explicitly, and rejects changed source or runtime contents. A byte-identical module may be replayed from a new path.
 
-Changing category assignment changes issue IDs. Adding a category is also visible in both the stable report v1 and case v1 formats; treat schema compatibility as part of the change, not as an internal detail.
+Changing category assignment changes issue IDs. Adding a category is also visible in the stable report v1 and case v2 formats; treat schema compatibility as part of the change, not as an internal detail.
 
 ## Worked extension: report a negative-zero result
 
@@ -237,6 +237,8 @@ export type IssueCategory =
 ```
 
 This is public JSON, saved-case, and TypeScript API surface. Decide whether consumers of report v1 are expected to accept new category strings or whether the schema identifier needs to change.
+
+Also add the string to the `isIssueCategory` validator in [`src/cases.ts`](src/cases.ts). Otherwise the new finding can be saved but its v2 replay case will be rejected when loaded.
 
 ### Step 3: classify the existing observation
 
@@ -347,7 +349,7 @@ Use this table to locate likely changes:
 | First issue per target | Later simultaneous disagreements are hidden by precedence | `audit.ts`, report contract |
 | Selected call-local effects only | Ambient/global/fs/network/import effects are not classified | runtime worker, semantic policy |
 | No repeated clean executions | Nondeterminism can escape a sampled run | audit loop, report evidence |
-| Runtime module omitted from saved case | Alternate-runtime replay must repeat `--runtime` | `cases.ts`, `cli.ts`, schema policy |
+| Runtime identity hashes only the entry file | Changes confined to transitive runtime dependencies are not detected by replay identity | provenance/dependency-manifest design |
 | Process isolation only | Audited code retains host filesystem, network, and subprocess access | worker launch/sandbox design |
 
 These are limits on the conclusion Crosscheck may draw, not invitations to silently skip cases. When semantics cannot be represented faithfully, prefer `NOT CHECKED` with a specific next step.

@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { auditFile, type AuditOptions } from "./audit.js";
-import { loadCase } from "./cases.js";
+import { loadCase, resolveReplayRuntime, type StoredCase } from "./cases.js";
 import { conciseCommandError } from "./command.js";
 import { runtimePackageRoot } from "./dafny-build.js";
 import { exitCode, renderFatal, renderReport } from "./report.js";
@@ -47,7 +47,33 @@ async function main(): Promise<void> {
   if (parsed.help) { process.stdout.write(help()); return; }
   if (parsed.version) { process.stdout.write(`${VERSION}\n`); return; }
 
-  const replay = parsed.replayId ? await loadCase(parsed.replayId) : undefined;
+  let replay: StoredCase | undefined;
+  try { replay = parsed.replayId ? await loadCase(parsed.replayId) : undefined; }
+  catch (error) {
+    const message = conciseCommandError(error);
+    const label = parsed.replayId ? `replay ${parsed.replayId}` : "replay";
+    if (parsed.json) {
+      const target = parsed.only ?? label;
+      const report: AuditReport = {
+        schema: "lemmascript-crosscheck.report/v1",
+        targets: [{
+          target,
+          runtimeTarget: parsed.entries.get(target) ?? target,
+          conclusion: "not-checked",
+          evidence: "tool-failure",
+          cases: 0,
+          seed: parsed.seed,
+          reason: message,
+          nextStep: "Record a new counterexample with this Crosscheck version.",
+        }],
+      };
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${renderFatal(label, message)}\n`);
+    }
+    process.exitCode = 2;
+    return;
+  }
   const source = path.resolve(parsed.source ?? replay?.source ?? "");
   if (!source || source === path.resolve("")) {
     console.error("A LemmaScript source file is required.");
@@ -58,6 +84,7 @@ async function main(): Promise<void> {
   if (replay) {
     parsed.only = replay.target;
     parsed.entries.set(replay.target, replay.runtimeTarget);
+    parsed.runtime = resolveReplayRuntime(replay, parsed.source, parsed.runtime);
   }
 
   let lastProgressLength = 0;

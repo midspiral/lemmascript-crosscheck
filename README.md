@@ -111,7 +111,7 @@ Resolve
   Use bigint, or prove that every input, intermediate, and result remains exact as a JavaScript number.
 
 Replay
-  lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts --replay 3d7220a805
+  lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts --replay 9d3caf14a5
 
 Evidence: replayed counterexample · Dafny 4.11.0 model
 ```
@@ -207,14 +207,14 @@ Use `--json` for the stable `lemmascript-crosscheck.report/v1` machine-readable 
 
 ## Replaying a counterexample
 
-Every issue is saved under a stable ten-character ID and printed with a replay command:
+Every issue is saved under a stable ten-character ID derived from the source and runtime contents, target mapping, category, and minimized witness. Crosscheck prints a complete replay command:
 
 ```sh
 lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts \
-  --replay 3d7220a805
+  --replay 9d3caf14a5
 ```
 
-Replay checks that the source has not changed, selects the recorded target and runtime export, and runs the saved input again. Cases are stored in `$XDG_CACHE_HOME/lemmascript-crosscheck/cases`, or `~/.cache/lemmascript-crosscheck/cases` when `XDG_CACHE_HOME` is unset. Set `LEMMASCRIPT_CROSSCHECK_CACHE` to choose another location.
+Replay checks that neither the source nor runtime entry module has changed, restores the recorded runtime path, target, and export mapping, and runs the saved input again. Commands for deployed modules include `--runtime` explicitly. If an unchanged runtime module moved, replace that path in the replay command; its content hash must still match. Cases are stored in `$XDG_CACHE_HOME/lemmascript-crosscheck/cases`, or `~/.cache/lemmascript-crosscheck/cases` when `XDG_CACHE_HOME` is unset. Set `LEMMASCRIPT_CROSSCHECK_CACHE` to choose another location.
 
 Compiled Dafny models are cached under the operating system's temporary directory. Set `LEMMASCRIPT_CROSSCHECK_BUILD_CACHE` to choose another build-cache location.
 

@@ -9,7 +9,7 @@ import { issueId, saveCase, type StoredCase } from "./cases.js";
 import type { AuditReport, Issue, IssueCategory, Provenance, TargetReport } from "./report-types.js";
 import { shrinkArgs } from "./shrink.js";
 import { satisfiesPreconditions, SpecUnsupported } from "./spec.js";
-import { verifyAndInspect } from "./toolchain.js";
+import { hashFile, verifyAndInspect } from "./toolchain.js";
 import { startWorkers, type AuditWorkers } from "./workers.js";
 
 export interface AuditOptions {
@@ -52,6 +52,13 @@ interface CaseOutcome {
   nextStep?: string;
 }
 
+export interface AuditIdentity {
+  source: string;
+  sourceSha256: string;
+  runtime: string;
+  runtimeSha256: string;
+}
+
 export async function auditFile(source: string, options: AuditOptions): Promise<AuditReport> {
   options.progress?.("verifying with LemmaScript");
   const verified = await verifyAndInspect(source, options.verifyTimeoutMs);
@@ -65,7 +72,25 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
     verified.dafnyVersion,
     options.verifyTimeoutMs,
   );
-  const runtime = path.resolve(options.runtime ?? verified.source);
+
+  const selected = verified.info.functions.filter(fn => fn.exported && (!options.only || fn.name === options.only));
+  if (options.only && selected.length === 0) throw new Error(`no exported verified target named ${options.only}`);
+  if (selected.length === 0) throw new Error("typed-info contains no exported verified functions");
+
+  const recordedRuntime = options.replay?.runtime === options.replay?.source
+    ? verified.source
+    : options.replay?.runtime;
+  const runtime = path.resolve(options.runtime ?? recordedRuntime ?? verified.source);
+  const runtimeSha256 = await hashFile(runtime);
+  if (options.replay && runtimeSha256 !== options.replay.runtimeSha256) {
+    throw new Error(`runtime module changed since replay ${options.replay.id} was recorded`);
+  }
+  const identity: AuditIdentity = {
+    source: verified.source,
+    sourceSha256: verified.sourceHash,
+    runtime,
+    runtimeSha256,
+  };
   const provenance: Provenance = {
     source: verified.source,
     sourceSha256: verified.sourceHash,
@@ -74,18 +99,15 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
     lemmascript: verified.lemmascriptVersion,
     dafny: verified.dafnyVersion,
     runtime,
+    runtimeSha256,
   };
-
-  const selected = verified.info.functions.filter(fn => fn.exported && (!options.only || fn.name === options.only));
-  if (options.only && selected.length === 0) throw new Error(`no exported verified target named ${options.only}`);
-  if (selected.length === 0) throw new Error("typed-info contains no exported verified functions");
 
   const workers = await startWorkers(compiled.modulePath, runtime, verified.info, options.timeoutMs);
   try {
     const targets: TargetReport[] = [];
     for (const fn of selected) {
       options.progress?.(`checking ${fn.name}`);
-      targets.push(await auditTarget(fn, verified.info, verified.source, verified.sourceHash, workers, options));
+      targets.push(await auditTarget(fn, verified.info, identity, workers, options));
     }
     return {
       schema: "lemmascript-crosscheck.report/v1",
@@ -100,8 +122,7 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
 export async function auditTarget(
   fn: TypedFunction,
   info: TypedInfo,
-  source: string,
-  sourceHash: string,
+  identity: AuditIdentity,
   workers: AuditWorkers,
   options: AuditOptions,
 ): Promise<TargetReport> {
@@ -303,7 +324,7 @@ export async function auditTarget(
         return result.kind === "issue" && result.issue?.category === original.category;
       });
       const replayed = stableArgsEqual(minimized, original.args) ? original : (await evaluate(minimized)).issue ?? original;
-      return await issueReport(fn, runtimeTarget, source, sourceHash, checked, options, replayed);
+      return await issueReport(fn, runtimeTarget, identity, checked, options, replayed);
     }
   }
 
@@ -327,7 +348,7 @@ export async function auditTarget(
       const result = await evaluate(minimized);
       if (result.kind === "unrepresentable") witness = { args: minimized, failure: result.failure! };
     }
-    return await domainIssueReport(fn, runtimeTarget, source, sourceHash, checked, options, witness);
+    return await domainIssueReport(fn, runtimeTarget, identity, checked, options, witness);
   }
   if (checked === 0) {
     return notChecked(fn.name, runtimeTarget, options, "no generated input satisfied the verified precondition", "Increase --cases or strengthen the generator for this precondition.");
@@ -391,8 +412,7 @@ async function callModel(
 async function issueReport(
   fn: TypedFunction,
   runtimeTarget: string,
-  source: string,
-  sourceHash: string,
+  identity: AuditIdentity,
   cases: number,
   options: AuditOptions,
   observed: ExecutedIssue,
@@ -400,7 +420,14 @@ async function issueReport(
   const args = encode(observed.args);
   const runtimeArgs = observed.runtimeArgs === undefined ? undefined : encode(observed.runtimeArgs);
   const idWitness = runtimeArgs === undefined ? args : encode([decode(args), decode(runtimeArgs)]);
-  const id = issueId(fn.name, observed.category, idWitness);
+  const id = issueId({
+    sourceSha256: identity.sourceSha256,
+    runtimeSha256: identity.runtimeSha256,
+    target: fn.name,
+    runtimeTarget,
+    category: observed.category,
+    args: idWitness,
+  });
   const language = issueLanguage(observed.category, fn.returnTy);
   const issue: Issue = {
     id,
@@ -423,8 +450,10 @@ async function issueReport(
     ...(observed.runtimeError === undefined ? {} : { runtimeError: observed.runtimeError }),
   };
   if (options.saveCases) await saveCase({
-    schema: "lemmascript-crosscheck.case/v1", id, source,
-    sourceSha256: sourceHash, target: fn.name, runtimeTarget, category: observed.category, args,
+    schema: "lemmascript-crosscheck.case/v2", id,
+    source: identity.source, sourceSha256: identity.sourceSha256,
+    runtime: identity.runtime, runtimeSha256: identity.runtimeSha256,
+    target: fn.name, runtimeTarget, category: observed.category, args,
     ...(runtimeArgs === undefined ? {} : { runtimeArgs }),
     ...(observed.presencePath === undefined ? {} : { presencePath: observed.presencePath }),
   });
@@ -434,14 +463,20 @@ async function issueReport(
 async function domainIssueReport(
   fn: TypedFunction,
   runtimeTarget: string,
-  source: string,
-  sourceHash: string,
+  identity: AuditIdentity,
   cases: number,
   options: AuditOptions,
   witness: DomainWitness,
 ): Promise<TargetReport> {
   const args = encode(witness.args);
-  const id = issueId(fn.name, "input-domain", args);
+  const id = issueId({
+    sourceSha256: identity.sourceSha256,
+    runtimeSha256: identity.runtimeSha256,
+    target: fn.name,
+    runtimeTarget,
+    category: "input-domain",
+    args,
+  });
   const issue: Issue = {
     id,
     category: "input-domain",
@@ -456,8 +491,10 @@ async function domainIssueReport(
     formalDisplay: formatFormalValue(witness.failure.formalValue),
   };
   if (options.saveCases) await saveCase({
-    schema: "lemmascript-crosscheck.case/v1", id, source,
-    sourceSha256: sourceHash, target: fn.name, runtimeTarget, category: "input-domain", args,
+    schema: "lemmascript-crosscheck.case/v2", id,
+    source: identity.source, sourceSha256: identity.sourceSha256,
+    runtime: identity.runtime, runtimeSha256: identity.runtimeSha256,
+    target: fn.name, runtimeTarget, category: "input-domain", args,
   });
   return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };
 }

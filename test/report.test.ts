@@ -20,7 +20,7 @@ test("a numeric counterexample leads with exact expected and actual values", () 
     schema: "lemmascript-crosscheck.report/v1",
     provenance: {
       source: "/tmp/arraySum.ts", sourceSha256: "s", artifact: "/tmp/arraySum.dfy",
-      artifactSha256: "a", lemmascript: "0.6.0", dafny: "4.11.0", runtime: "/tmp/arraySum.ts",
+      artifactSha256: "a", lemmascript: "0.6.0", dafny: "4.11.0", runtime: "/tmp/arraySum.ts", runtimeSha256: "r",
     },
     targets: [{
       target: "arraySum", runtimeTarget: "arraySum", conclusion: "issue", evidence: "counterexample",
@@ -41,6 +41,31 @@ test("a numeric counterexample leads with exact expected and actual values", () 
   assert.match(text, /JavaScript\s+9007199254740992/);
   assert.match(text, /Replay\n  lemmascript-crosscheck \/tmp\/arraySum\.ts --replay 1234567890/);
   assert.match(text, /Evidence: replayed counterexample · Dafny 4\.11\.0 model/);
+});
+
+test("an alternate runtime is included in the replay command", () => {
+  const report: AuditReport = {
+    schema: "lemmascript-crosscheck.report/v1",
+    provenance: {
+      source: "/tmp/source.ts", sourceSha256: "s", artifact: "/tmp/source.dfy",
+      artifactSha256: "a", lemmascript: "0.6.0", dafny: "4.11.0", runtime: "/tmp/dist/runtime.js", runtimeSha256: "r",
+    },
+    targets: [{
+      target: "formal", runtimeTarget: "deployed", conclusion: "issue", evidence: "counterexample",
+      cases: 1, seed: 17,
+      issue: {
+        id: "1234567890", category: "result-mismatch",
+        summary: "results differ", diagnosis: "Different results", resolution: "Repair the runtime",
+        args: encode([0n]), paramNames: ["x"], argDisplays: ["0"],
+        modelResult: "0", runtimeResult: encode(1), runtimeExact: "1",
+      },
+    }],
+  };
+
+  assert.match(
+    renderReport(report, { details: false }),
+    /lemmascript-crosscheck \/tmp\/source\.ts --runtime \/tmp\/dist\/runtime\.js --replay 1234567890/,
+  );
 });
 
 test("present undefined is not rendered as an omitted object property", () => {
