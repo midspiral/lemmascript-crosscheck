@@ -13,8 +13,7 @@
   "files": [
     "dist",
     "README.md",
-    "DESIGN.md",
-    "ROADMAP.md"
+    "DESIGN.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

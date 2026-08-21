@@ -228,4 +228,4 @@ npm run typecheck
 npm run build
 ```
 
-The implementation lives in `src/`, with focused unit tests in `test/`. The current architecture and design decisions are documented in [DESIGN.md](DESIGN.md); proposed extensions are kept separately in [ROADMAP.md](ROADMAP.md).
+The implementation lives in `src/`, with focused unit tests in `test/`. The current architecture and design decisions are documented in [DESIGN.md](DESIGN.md).

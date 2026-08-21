@@ -2,7 +2,7 @@
 
 **Status:** authoritative description of the v0.1.0 implementation.
 
-[README.md](README.md) is the user guide. [ROADMAP.md](ROADMAP.md) contains proposed work that is not part of the current CLI contract.
+[README.md](README.md) is the user guide. This document records the implementation architecture, behavioral contract, and settled design decisions.
 
 ## Product boundary
 
@@ -310,8 +310,6 @@ The v0.1.0 implementation intentionally has a narrower contract than the long-te
 - arbitrary invalid JavaScript inputs and boundary enforcement are not tested;
 - there are no per-operation transfer certificates or `PROVED` conclusion; and
 - workers provide process isolation, not a security sandbox.
-
-Planned extensions and unresolved product choices are tracked in [ROADMAP.md](ROADMAP.md).
 
 ## Tests and release checks
 
