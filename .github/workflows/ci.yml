@@ -42,8 +42,10 @@ jobs:
         shell: bash
         run: |
           package_tarball="$(npm pack --pack-destination "$RUNNER_TEMP")"
-          tar -tf "$RUNNER_TEMP/$package_tarball" | grep -qx 'package/dist/src/cli.js'
-          if tar -tf "$RUNNER_TEMP/$package_tarball" | grep -q '^package/dist/test/'; then
+          package_listing="$RUNNER_TEMP/package-contents.txt"
+          tar -tf "$RUNNER_TEMP/$package_tarball" > "$package_listing"
+          grep -qx 'package/dist/src/cli.js' "$package_listing"
+          if grep -q '^package/dist/test/' "$package_listing"; then
             echo "Compiled tests leaked into the npm package."
             exit 1
           fi
@@ -56,4 +58,4 @@ jobs:
           expected_version="$(node -p "require('./node_modules/lemmascript-crosscheck/package.json').version")"
           actual_version="$(./node_modules/.bin/lemmascript-crosscheck --version)"
           test "$actual_version" = "$expected_version"
-          ./node_modules/.bin/lemmascript-crosscheck --help | grep -q '^Usage:'
+          ./node_modules/.bin/lemmascript-crosscheck --help | grep '^Usage:' > /dev/null
