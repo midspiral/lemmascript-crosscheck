@@ -2,7 +2,7 @@
 
 **Status:** authoritative description of the v0.1.0 implementation.
 
-[README.md](README.md) is the user guide. This document records the implementation architecture, behavioral contract, and settled design decisions.
+[README.md](README.md) is the user guide, and [TUTORIAL_DEV.md](TUTORIAL_DEV.md) is the practical code-reading and extension guide. This document records the authoritative implementation architecture, behavioral contract, and settled design decisions.
 
 ## Product boundary
 

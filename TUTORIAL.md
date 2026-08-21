@@ -296,4 +296,4 @@ Once the first example makes sense, the sibling LemmaScript fixtures provide foc
 - `examples/spreadMerge.ts` distinguishes omission from present `undefined`; and
 - `examples/bigintBits.ts` demonstrates sampled agreement with exact `bigint` operations.
 
-For the complete option reference and supported type list, see [README.md](README.md). For the implementation contract and component boundaries, see [DESIGN.md](DESIGN.md).
+For the complete option reference and supported type list, see [README.md](README.md). Developers can continue with the practical codebase guide in [TUTORIAL_DEV.md](TUTORIAL_DEV.md); the authoritative implementation contract and component boundaries are in [DESIGN.md](DESIGN.md).
