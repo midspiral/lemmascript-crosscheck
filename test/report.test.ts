@@ -15,6 +15,24 @@ test("sampled success says it is not a proof", () => {
   assert.match(renderReport(report, { details: false }), /100 sampled proof-valid inputs · seed 17 · not a proof/);
 });
 
+test("contract-only success describes TypeScript-domain evidence", () => {
+  const report: AuditReport = {
+    schema: "lemmascript-crosscheck.report/v1",
+    targets: [{
+      target: "search",
+      runtimeTarget: "search",
+      conclusion: "no-issue",
+      evidence: "sampled",
+      cases: 40,
+      seed: 17,
+      checks: ["contract"],
+    }],
+  };
+  const text = renderReport(report, { details: false });
+  assert.match(text, /40 sampled precondition-valid TypeScript inputs/);
+  assert.doesNotMatch(text, /proof-valid inputs/);
+});
+
 test("a numeric counterexample leads with exact expected and actual values", () => {
   const report: AuditReport = {
     schema: "lemmascript-crosscheck.report/v1",
@@ -73,6 +91,42 @@ test("an input representation mismatch shows formal and rounded JavaScript argum
   assert.match(text, /target\s+9007199254740993 → 9007199254740992/);
   assert.match(text, /verified\s+-1/);
   assert.match(text, /JavaScript\s+0/);
+});
+
+test("a proof-domain gap is rendered as an executed TypeScript witness", () => {
+  const report: AuditReport = {
+    schema: "lemmascript-crosscheck.report/v1",
+    targets: [{
+      target: "binarySearch",
+      runtimeTarget: "binarySearch",
+      conclusion: "issue",
+      evidence: "counterexample",
+      cases: 3,
+      seed: 17,
+      issue: {
+        id: "1234567890",
+        category: "proof-domain-gap",
+        summary: "TypeScript accepts a precondition-valid input outside the verified domain",
+        diagnosis: "fractional TypeScript number is outside the verified int domain",
+        resolution: "Narrow the runtime domain.",
+        args: encode([[0.5], 0]),
+        paramNames: ["arr", "target"],
+        argDisplays: ["[0.5]", "0"],
+        runtimePath: "arr[0]",
+        runtimeValue: encode(0.5),
+        runtimeDisplay: "0.5",
+        runtimeResult: encode(-1),
+        postconditionsSatisfied: true,
+      },
+    }],
+  };
+
+  const text = renderReport(report, { details: false });
+  assert.match(text, /TypeScript witness/);
+  assert.match(text, /Outside verified domain/);
+  assert.match(text, /arr\[0\]\s+0\.5/);
+  assert.match(text, /postconditions, but the Dafny proof does not cover this input/);
+  assert.match(text, /executed TypeScript contract counterexample/);
 });
 
 test("an alternate runtime is included in the replay command", () => {

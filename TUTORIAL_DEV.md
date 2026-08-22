@@ -80,7 +80,7 @@ Start with [`src/audit.ts`](src/audit.ts); it is the orchestration center. Read 
 | Exact transport | `rational.ts`, `codec.ts` | Exact values, deterministic encoding, equality, display |
 | Verification | `toolchain.ts`, `command.ts` | Tool versions, typed metadata, LemmaScript/Dafny verification, subprocess errors |
 | Model build | `dafny-build.ts`, `dafny-runtime.ts` | Cached Dafny-to-JavaScript compilation and value marshalling |
-| Candidate semantics | `generate.ts`, `spec.ts`, `bridge.ts` | Exact inputs, verified preconditions, faithful runtime encoding |
+| Candidate semantics | `generate.ts`, `spec.ts`, `runtime-spec.ts`, `bridge.ts` | Formal and runtime inputs, verified preconditions, JavaScript contracts, and domain bridges |
 | Execution | `workers.ts`, `json-line-client.ts`, `model-worker.ts`, `runtime-worker.ts` | Process lifecycle, protocol, timeouts, model and runtime calls |
 | Findings | `audit.ts`, `shrink.ts`, `cases.ts` | Classification, precedence, minimization, IDs, persistence, replay |
 | Interface | `report.ts`, `cli.ts` | Human/JSON output, options, progress, exit policy |
@@ -98,11 +98,15 @@ cli.main
        -> compileVerifiedDafny
        -> startWorkers
        -> auditTarget, once per selected function
-            -> candidateCases
-            -> satisfiesPreconditions
-            -> encodeRuntime
-            -> runtime worker call
-            -> model worker call and exact comparison
+            -> contract: runtimeCandidateCases
+               -> satisfiesRuntimePreconditions
+               -> runtime worker call
+               -> checkRuntimePostconditions + runtimeDomainFailure
+            -> differential: candidateCases
+               -> satisfiesPreconditions
+               -> encodeRuntime
+               -> runtime worker call
+               -> model worker call and exact comparison
             -> shrinkArgs
             -> saveCase
   -> renderReport or JSON.stringify

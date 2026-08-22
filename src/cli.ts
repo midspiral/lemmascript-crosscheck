@@ -7,7 +7,7 @@ import { loadCase, resolveReplayRuntime, type StoredCase } from "./cases.js";
 import { conciseCommandError } from "./command.js";
 import { runtimePackageRoot } from "./dafny-build.js";
 import { exitCode, renderFatal, renderReport } from "./report.js";
-import type { AuditReport } from "./report-types.js";
+import type { AuditReport, CheckKind } from "./report-types.js";
 
 interface CliOptions {
   source?: string;
@@ -21,6 +21,7 @@ interface CliOptions {
   details: boolean;
   json: boolean;
   entries: Map<string, string>;
+  checks: Set<CheckKind>;
   help: boolean;
   version: boolean;
 }
@@ -104,6 +105,7 @@ async function main(): Promise<void> {
       timeoutMs: parsed.timeoutMs,
       verifyTimeoutMs: parsed.verifyTimeoutMs,
       entries: parsed.entries,
+      checks: parsed.checks,
       saveCases: true,
       ...(parsed.runtime === undefined ? {} : { runtime: parsed.runtime }),
       ...(parsed.only === undefined ? {} : { only: parsed.only }),
@@ -149,6 +151,7 @@ function parseArgs(args: string[]): CliOptions {
     details: false,
     json: false,
     entries: new Map(),
+    checks: new Set(["differential"]),
     help: false,
     version: false,
   };
@@ -173,6 +176,7 @@ function parseArgs(args: string[]): CliOptions {
     else if (name === "--seed") result.seed = integer(name, value);
     else if (name === "--timeout") result.timeoutMs = positiveInteger(name, value);
     else if (name === "--verify-timeout") result.verifyTimeoutMs = positiveInteger(name, value);
+    else if (name === "--checks") result.checks = parseChecks(value);
     else if (name === "--entry") {
       const separator = value.indexOf("=");
       if (separator <= 0 || separator === value.length - 1) throw new Error("--entry must be formalName=runtimeName");
@@ -180,6 +184,18 @@ function parseArgs(args: string[]): CliOptions {
     } else throw new Error(`Unknown option: ${name}`);
   }
   return result;
+}
+
+function parseChecks(value: string): Set<CheckKind> {
+  const checks = new Set<CheckKind>();
+  for (const part of value.split(",")) {
+    if (part !== "contract" && part !== "differential") {
+      throw new Error(`--checks contains unknown check: ${part}`);
+    }
+    checks.add(part);
+  }
+  if (checks.size === 0) throw new Error("--checks requires contract, differential, or both");
+  return checks;
 }
 
 function splitFlag(arg: string): [string, string | undefined] {
@@ -201,7 +217,7 @@ function integer(name: string, value: string): number {
 }
 
 function help(): string {
-  return `lemmascript-crosscheck ${VERSION}\n\nUsage:\n  lemmascript-crosscheck <source.ts> [options]\n\nOptions:\n  --only <name>          Check one exported verified function\n  --runtime <module>     Execute a deployed module instead of the source\n  --entry A=B            Map formal target A to runtime export B\n  --cases <count>        Proof-valid executions per target (default: 100)\n  --seed <integer>       Deterministic generation seed (default: 17)\n  --timeout <ms>         Per-call worker deadline (default: 2000)\n  --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)\n  --replay <id>          Replay a saved counterexample\n  --details              Expand every target in a multi-target file\n  --json                 Emit the stable machine report\n  --help                  Show this help\n  --version               Show the version\n\nDevelopment checkout:\n  LEMMASCRIPT=../LemmaScript lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts\n`;
+  return `lemmascript-crosscheck ${VERSION}\n\nUsage:\n  lemmascript-crosscheck <source.ts> [options]\n\nOptions:\n  --only <name>          Check one exported verified function\n  --runtime <module>     Execute a deployed module instead of the source\n  --entry A=B            Map formal target A to runtime export B\n  --cases <count>        Accepted executions per target (default: 100)\n  --checks <list>        contract, differential, or both (default: differential)\n  --seed <integer>       Deterministic generation seed (default: 17)\n  --timeout <ms>         Per-call worker deadline (default: 2000)\n  --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)\n  --replay <id>          Replay a saved counterexample\n  --details              Expand every target in a multi-target file\n  --json                 Emit the stable machine report\n  --help                  Show this help\n  --version               Show the version\n\nDevelopment checkout:\n  LEMMASCRIPT=../LemmaScript lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts\n`;
 }
 
 void main();

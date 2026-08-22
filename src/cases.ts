@@ -96,6 +96,8 @@ function isIssueCategory(value: unknown): value is IssueCategory {
     "result-mismatch",
     "input-domain",
     "input-representation-mismatch",
+    "proof-domain-gap",
+    "runtime-postcondition-violation",
     "input-mutation",
     "optional-presence",
     "console-output",

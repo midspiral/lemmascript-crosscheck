@@ -21,10 +21,18 @@ export function exitCode(report: AuditReport): number {
 function renderTarget(target: TargetReport, report: AuditReport): string {
   if (target.conclusion === "issue") return renderIssue(target, target.issue!, report);
   if (target.conclusion === "no-issue") {
-    const evidence = target.evidence === "exhaustive"
+    const differentialEvidence = target.evidence === "exhaustive"
       ? "exhaustive input domain (the function has no parameters)"
       : `${target.cases} sampled proof-valid inputs · seed ${target.seed} · not a proof`;
-    return `${target.target} — NO ISSUE FOUND\nEvidence: ${evidence}`;
+    const contractOnly = target.checks?.length === 1 && target.checks[0] === "contract";
+    const contractEvidence = target.evidence === "exhaustive"
+      ? "exhaustive TypeScript input domain (the function has no parameters)"
+      : `${contractOnly ? target.cases : target.contractCases ?? 0} sampled precondition-valid TypeScript inputs · seed ${target.seed} · not a proof`;
+    if (contractOnly) return `${target.target} — NO ISSUE FOUND\nEvidence: ${contractEvidence}`;
+    if (target.checks?.includes("contract")) {
+      return `${target.target} — NO ISSUE FOUND\nEvidence:\n  contract      ${contractEvidence}\n  differential  ${differentialEvidence}`;
+    }
+    return `${target.target} — NO ISSUE FOUND\nEvidence: ${differentialEvidence}`;
   }
   return [
     `${target.target} — NOT CHECKED`,
@@ -42,6 +50,31 @@ function renderIssue(target: TargetReport, issue: Issue, report: AuditReport): s
     appendArgs(lines, issue);
     if (issue.formalPath && issue.formalDisplay) lines.push(`  ${issue.formalPath.padEnd(12)}${issue.formalDisplay}`);
     lines.push("", issue.diagnosis + ".", "This is a model/runtime domain mismatch, not an executed JavaScript call.");
+  } else if (issue.category === "proof-domain-gap") {
+    lines.push("TypeScript witness");
+    appendArgs(lines, issue);
+    if (issue.runtimePath && issue.runtimeDisplay) {
+      lines.push("", "Outside verified domain", `  ${issue.runtimePath.padEnd(12)}${issue.runtimeDisplay}`);
+    }
+    if (issue.runtimeResult !== undefined) {
+      lines.push("", "JavaScript result", `  ${formatValue(decode(issue.runtimeResult))}`);
+    }
+    if (issue.postconditionsSatisfied === true) {
+      lines.push("", "Runtime contract", "  The sampled call satisfied its postconditions, but the Dafny proof does not cover this input.");
+    }
+    lines.push("", "Cause", `  ${issue.diagnosis}`);
+  } else if (issue.category === "runtime-postcondition-violation") {
+    lines.push("Input");
+    appendArgs(lines, issue);
+    if (issue.runtimeError !== undefined) {
+      lines.push("", "JavaScript result", `  ${issue.runtimeError}`);
+    } else if (issue.runtimeResult !== undefined) {
+      lines.push("", "JavaScript result", `  ${formatValue(decode(issue.runtimeResult))}`);
+    }
+    if (issue.postconditionClause !== undefined) {
+      lines.push("", "Violated contract", `  postcondition clause ${issue.postconditionClause}`);
+    }
+    lines.push("", "Cause", `  ${issue.diagnosis}`);
   } else {
     lines.push(issue.category === "input-representation-mismatch" ? "Formal input" : "Input");
     appendArgs(lines, issue);
@@ -73,8 +106,9 @@ function renderIssue(target: TargetReport, issue: Issue, report: AuditReport): s
     lines.push("", "Cause", `  ${issue.diagnosis}`);
   }
   lines.push("", "Resolve", `  ${issue.resolution}`, "", "Replay", `  ${replayCommand(report, issue.id)}`);
-  const backend = report.provenance ? ` · Dafny ${report.provenance.dafny} model` : "";
-  lines.push("", `Evidence: replayed counterexample${backend}`);
+  const runtimeContract = issue.category === "proof-domain-gap" || issue.category === "runtime-postcondition-violation";
+  const backend = report.provenance && !runtimeContract ? ` · Dafny ${report.provenance.dafny} model` : "";
+  lines.push("", `Evidence: ${runtimeContract ? "executed TypeScript contract" : "replayed"} counterexample${backend}`);
   return lines.join("\n");
 }
 

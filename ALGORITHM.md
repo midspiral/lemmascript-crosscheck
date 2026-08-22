@@ -43,6 +43,22 @@ Crosscheck searches a finite, deterministic candidate sequence. Agreement is
 therefore sampled evidence, except for a zero-parameter function, whose input
 domain contains the single tuple `[]`.
 
+When `contract` is selected, let `j` be a tuple generated directly in the
+TypeScript runtime domain, `Pj(j)` be the `requires` clauses evaluated with
+JavaScript semantics, `J(j)` be the runtime result, `Qj(j, J(j))` be the
+JavaScript-semantics `ensures`, and `D(j)` mean that every runtime argument has
+a corresponding value in its resolved verified type. The checked relations are:
+
+```text
+Pj(j) ==> Qj(j, J(j))
+Pj(j) ==> D(j)
+```
+
+A false first relation is `runtime-postcondition-violation`. A false second
+relation is `proof-domain-gap`, even when the sampled runtime postconditions
+hold. Contract inputs are never represented as if they were formal inputs and
+are never passed to the Dafny model.
+
 ## 2. Whole-file procedure
 
 `auditFile` in [`src/audit.ts`](src/audit.ts) implements the following order:
@@ -76,10 +92,19 @@ AUDIT_FILE(source, options):
 
   start one restartable model worker, then one restartable runtime worker
   for fn in selected, sequentially:
-    append AUDIT_TARGET(fn) to the report
+    if contract is selected:
+      contractReport := AUDIT_RUNTIME_CONTRACT_TARGET(fn)
+      if contractReport is not NO ISSUE, or differential is not selected:
+        append contractReport and continue
+    append AUDIT_DIFFERENTIAL_TARGET(fn) to the report
   close both workers in a finally block
   return report schema lemmascript-crosscheck.report/v1
 ```
+
+`--checks` accepts `contract`, `differential`, or their comma-separated
+combination and defaults to `differential`. Replay ignores that selection and
+uses `contract` for its two contract categories and `differential` for every
+other stored category.
 
 ### Verification and model compilation
 
@@ -653,6 +678,93 @@ There are two precedence levels:
 If no issue is found, evidence is labeled `exhaustive` exactly when the
 function has zero parameters; every parameterized result is `sampled`.
 
+### Runtime contract search
+
+`RUNTIME_CANDIDATES` uses the same baseline, one-parameter, bounded pairwise,
+seeded-random, and stable-deduplication schedule as section 4, but constructs
+executable values. A number-backed `int`, `nat`, or `real` receives, in order:
+
+```text
+0, 0.5, -0.5, 0.1, 0.2, 0.3, (0.1 + 0.2), -0,
+NaN, +Infinity, -Infinity, 1, -1, Number.MIN_VALUE,
+Number.MAX_VALUE, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1
+```
+
+`bigint`-backed integers and naturals receive signed bigint edges because the
+TypeScript `bigint` signature itself does not enforce naturalness. Runtime
+arrays receive singleton and adjacent-pair element edges plus
+`[0.1,0.2,0.3]`, `[0.1,0.1+0.2]`, and `[-0.5,0,0.5]`. Runtime strings include
+a lone UTF-16 surrogate. Composite generation recursively retains the runtime
+shape selected by TypeScript spellings such as `Map<K,V>` versus records.
+
+The contract loop is equivalent to:
+
+```text
+cases := contract replay ? [decode(replay.args)]
+                         : RUNTIME_CANDIDATES(fn, N, seed)
+checked := 0
+firstProofDomainGap := none
+incomplete := none
+
+for runtimeArgs in cases:
+  if not replay and checked >= N: break
+
+  valid := evaluate runtime requires with JavaScript semantics
+  if unsupported or a delegated runtime predicate fails:
+    incomplete := that failure
+    break
+  if not valid: continue
+
+  checked := checked + 1
+  gap := first argument value outside its resolved verified type, if any
+
+  execute the selected runtime export
+  if it times out or throws:
+    save and return runtime-postcondition-violation
+  if it is async, missing, or the worker fails:
+    incomplete := that failure
+    break
+
+  postArgs := the worker's post-call argument snapshot
+  evaluate ensures in order with JavaScript semantics and bind \\result
+  if a clause is false:
+    save and return runtime-postcondition-violation with its 1-based index
+  if postcondition evaluation is unsupported and gap exists:
+    remember the gap without claiming that ensures succeeded; continue
+  if postcondition evaluation is unsupported without a gap:
+    incomplete := that failure
+    break
+  if gap exists and firstProofDomainGap is empty:
+    remember it with the runtime result and successful-contract evidence
+
+if firstProofDomainGap exists:
+  save and return proof-domain-gap
+if incomplete exists:
+  return NOT CHECKED
+if checked == 0:
+  return NOT CHECKED(no generated runtime input satisfied requires)
+if replay:
+  return NOT CHECKED(the contract issue no longer reproduces)
+return NO ISSUE FOUND
+```
+
+Runtime-domain membership is recursive. Number-backed formal integers require
+a finite integral JavaScript number; naturals additionally require a
+nonnegative value. Formal reals admit every finite binary64 value by its exact
+rational image except the observationally distinct `-0`. `NaN`, infinities,
+and `-0` are outside these verified numeric domains. Arrays must be dense;
+tuples retain arity; composite fields, collection entries, aliases, records,
+and active union variants are checked recursively.
+
+The JavaScript contract evaluator implements ordinary unary/binary operators,
+short-circuit boolean connectives and implication, fields, indices, literals,
+records, optional operations, supported collection methods, runtime predicate
+calls, and tag/option matches. A bounded `forall` must use an implication whose
+antecedent supplies its range; existential bodies are scanned for top-level
+conjunctive integer bounds. Natural binders default to lower bound zero. Both
+bounds must be safe finite integers and the inclusive range may contain at most
+10,000 values. Enumeration is complete or the target is `NOT CHECKED`.
+
 ## 11. Minimization
 
 `shrinkArgs` in [`src/shrink.ts`](src/shrink.ts) is a deterministic
@@ -699,6 +811,11 @@ An input-domain witness is currently shrunk whenever this is not a replay. Its
 predicate requires only that a fresh evaluation be `unrepresentable`; it does
 not require the same bridge failure, path, or formal type validity.
 
+`proof-domain-gap` and `runtime-postcondition-violation` witnesses are not
+shrunk. They retain the runtime value tuple that was actually executed and the
+associated domain path or failed clause; reports label this as executed rather
+than minimized-and-replayed evidence.
+
 This is an important current limitation: the shrinker is representation-driven,
 not type-directed. It can shorten a finite
 string-union member, alter a discriminant, or remove tuple elements, thereby
@@ -709,8 +826,9 @@ such a minimized input-domain witness is sound.
 
 ## 12. Issue identity, persistence, and replay
 
-The identity witness is `encode(formalArgs)` unless the issue observation
-actually retained alternate `runtimeArgs`, in which case it is
+The identity witness is `encode(runtimeArgs)` for contract issues. For
+differential issues it is `encode(formalArgs)` unless the observation actually
+retained alternate `runtimeArgs`, in which case it is
 `encode([formalArgs, runtimeArgs])`. Internally produced `optional-presence`
 result findings and `input-representation-mismatch` findings retain them; as
 noted in section 8, ordinary categories found during a presence probe currently
@@ -734,7 +852,8 @@ the alternate runtime arguments normally distinguish the representation.
 When case saving is enabled, Crosscheck writes
 `lemmascript-crosscheck.case/v2` with source/runtime paths and hashes, target
 mapping, category, formal arguments, and optional runtime arguments and
-presence path. The cache root is chosen in this order:
+presence path. For a contract category the `args` field instead contains the
+executed runtime tuple. The cache root is chosen in this order:
 
 1. `$LEMMASCRIPT_CROSSCHECK_CACHE`;
 2. `$XDG_CACHE_HOME/lemmascript-crosscheck/cases`; or
@@ -744,8 +863,11 @@ Replay requires a lowercase ten-hex ID, a `case/v2` object whose `id` field
 matches it, recognized category/source/runtime/target fields, and syntactically
 valid SHA-256 strings. This is a shallow schema check: it does not recursively
 validate the tagged arguments or recompute the ID digest from the stored
-fields. Replay then selects the stored target and runtime export and uses
-exactly the decoded stored formal tuple. For an input-representation case it
+fields. Replay then selects the stored target and runtime export. Contract
+categories use exactly the decoded stored runtime tuple and rerun runtime
+preconditions, execution, postconditions, and verified-domain membership; a
+clean replay is `NOT CHECKED` with a no-longer-reproduces reason. Differential
+categories use the tuple as formal values. For an input-representation case it
 also recomputes the numeric projection and requires the stored runtime tuple to
 match it. Replay performs no generation, no optional-variant enumeration, and
 no shrinking. An explicit source/runtime path may replace a recorded path only
@@ -753,11 +875,11 @@ when its content hash is the same. If the recorded runtime was the recorded
 source, a source override also becomes the runtime unless `--runtime` is
 explicit.
 
-The stored category is validated as a known category, but the current replay
-path does not require the new observation to have that category. It reports
-the outcome observed now: an issue may receive a newly computed category/ID, a
-clean replay may report `NO ISSUE FOUND`, and a now-precondition-invalid replay
-ends as `NOT CHECKED` because zero inputs satisfied the precondition.
+The stored category is validated as a known category. The differential replay
+path does not require the new observation to have that category: an issue may
+receive a newly computed category/ID, a clean replay may report `NO ISSUE
+FOUND`, and a now-precondition-invalid replay ends as `NOT CHECKED` because
+zero inputs satisfied the precondition.
 
 ## 13. Report and exit policy
 
@@ -765,7 +887,7 @@ Each target returns exactly one of:
 
 - `ISSUE FOUND` / `counterexample` for a faithfully represented executable
   issue, an observed numeric-projection result mismatch, or the remembered
-  input-domain witness;
+  input-domain witness, runtime postcondition violation, or proof-domain gap;
 - `NOT CHECKED` / `tool-failure` for unsupported semantics or an incomplete
   comparison; or
 - `NO ISSUE FOUND` / `sampled|exhaustive` after the candidate budget ends.
@@ -776,6 +898,10 @@ input-domain issue it is the number of completed representable main
 comparisons made before the remembered witness was reported. Optional and
 numeric variants are never included. Shrink and final-witness evaluations are
 not included either.
+
+For contract checking, `cases` counts generated inputs whose runtime
+preconditions succeeded, including the failing or remembered witness. Runtime
+predicate calls are not counted.
 
 Process exit status is `2` if any target is `NOT CHECKED`, otherwise `1` if any
 target has an issue, otherwise `0`. Thus `NOT CHECKED` takes precedence in a
@@ -806,8 +932,8 @@ runs differ.
 | Procedure | Implementation |
 | --- | --- |
 | Whole-file and per-target loops, classification | [`src/audit.ts`](src/audit.ts) |
-| Candidate sequence and RNG | [`src/generate.ts`](src/generate.ts) |
-| Preconditions | [`src/spec.ts`](src/spec.ts) |
+| Formal and runtime candidate sequences and RNG | [`src/generate.ts`](src/generate.ts) |
+| Exact preconditions and JavaScript contracts | [`src/spec.ts`](src/spec.ts), [`src/runtime-spec.ts`](src/runtime-spec.ts) |
 | Formal/runtime bridge and presence variants | [`src/bridge.ts`](src/bridge.ts) |
 | Exact rationals and tagged values | [`src/rational.ts`](src/rational.ts), [`src/codec.ts`](src/codec.ts) |
 | Dafny marshalling and equality | [`src/dafny-runtime.ts`](src/dafny-runtime.ts) |

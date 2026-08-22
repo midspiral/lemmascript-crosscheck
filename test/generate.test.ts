@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { candidateCases, MAX_SAFE_INTEGER } from "../src/generate.js";
+import { candidateCases, MAX_SAFE_INTEGER, runtimeCandidateCases } from "../src/generate.js";
 import type { TypedFunction, TypedInfo } from "../src/ir.js";
 
 const baseInfo: TypedInfo = {
@@ -32,6 +32,17 @@ test("integer arrays include a representable accumulator-overflow witness", () =
   const cases = candidateCases(fn([{ name: "arr", ty: { kind: "array", elem: { kind: "int" } }, tsType: "number[]" }]), baseInfo, 10, 17);
   assert(cases.some(args => Array.isArray(args[0])
     && args[0].length === 2 && args[0][0] === MAX_SAFE_INTEGER && args[0][1] === 2n));
+});
+
+test("runtime-domain generation includes fractional values for TypeScript number inputs", () => {
+  const target = fn([
+    { name: "arr", ty: { kind: "array", elem: { kind: "int" } }, tsType: "number[]" },
+    { name: "target", ty: { kind: "int" }, tsType: "number" },
+  ]);
+  const cases = runtimeCandidateCases(target, baseInfo, 10, 17);
+  assert(cases.some(args => Array.isArray(args[0]) && args[0][0] === 0.5));
+  assert(cases.some(args => args[1] === 0.5));
+  assert(cases.some(args => Number.isNaN(args[1])));
 });
 
 test("pairwise generation includes one divided by ten", () => {

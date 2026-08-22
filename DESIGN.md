@@ -14,7 +14,13 @@ The common operation is a source-runtime audit:
 lemmascript-crosscheck path/to/file.ts
 ```
 
-Crosscheck verifies the source, compiles the verified Dafny artifact into an executable model, generates inputs valid under the formal preconditions, runs both implementations, and compares their results and selected effects.
+Crosscheck verifies the source and supports two selected checks. `differential`
+generates formal inputs, executes the verified Dafny model and TypeScript, and
+compares their behavior. `contract` generates from the executable TypeScript
+domain, evaluates `requires` and `ensures` with JavaScript semantics, and looks
+for both runtime postcondition violations and precondition-valid inputs that
+the verified parameter types exclude. Differential checking is the default;
+`--checks` selects either check or both.
 
 Crosscheck does not:
 
@@ -25,13 +31,29 @@ Crosscheck does not:
 - test arbitrary malformed JavaScript inputs; or
 - safely sandbox untrusted source code.
 
-The distinction between proof and transfer evidence is fundamental. LemmaScript proves the formal program. Crosscheck gathers evidence about whether JavaScript preserves that program's meaning.
+The distinction between proof and sampled runtime evidence is fundamental.
+LemmaScript proves the formal program. Crosscheck gathers evidence about
+whether JavaScript preserves that program's meaning and whether the executable
+signature admits values outside the proof.
 
 ## Design principles
 
 ### Exact values come first
 
-Generation begins in the formal value domain. Values are encoded for JavaScript only after they satisfy the verified preconditions. This preserves witnesses, such as integers outside JavaScript's exact range, that would be lost if generation began with JavaScript values.
+Differential generation begins in the formal value domain. Values are encoded
+for JavaScript only after they satisfy the verified preconditions. This
+preserves witnesses, such as integers outside JavaScript's exact range, that
+would be lost if generation began with JavaScript values.
+
+### Runtime domains are checked in their own semantics
+
+Contract generation begins with executable TypeScript shapes. A `number`
+therefore includes fractions, `NaN`, infinities, and `-0` even when LemmaScript
+resolved the verified parameter as `int` or `nat`. Runtime `requires` and
+`ensures` use JavaScript arithmetic, comparison, equality, and truthiness. A
+postcondition-valid call can still be an issue when its input has no value in
+the verified domain: the runtime behavior exists, but the proof does not cover
+it.
 
 ### Unsupported semantics are explicit
 
@@ -71,6 +93,13 @@ exact model-value generator --> precondition filter --> representation bridge
                                   shrink + save replay
                                             |
                                     human / JSON report
+
+TypeScript-value generator --> runtime requires --> runtime worker
+          |                                         |
+          +--> verified-domain membership      runtime ensures
+                            \________________________/
+                                      |
+                               replayable finding
 ```
 
 The main implementation components are:
@@ -81,8 +110,8 @@ The main implementation components are:
 | Verification adapter | `src/toolchain.ts` | LemmaScript invocation, typed metadata, source/artifact identity, and backend selection. |
 | Model compiler | `src/dafny-build.ts` | Cached compilation of the already verified Dafny artifact to JavaScript. |
 | Semantic values | `src/rational.ts`, `src/codec.ts` | Exact rationals and a lossless JSON-line representation. |
-| Representation bridge | `src/bridge.ts`, `src/dafny-runtime.ts` | Formal-to-runtime encoding and Dafny value marshalling. |
-| Input discovery | `src/generate.ts`, `src/spec.ts` | Deterministic edges, seeded generation, and precondition evaluation. |
+| Representation bridge | `src/bridge.ts`, `src/dafny-runtime.ts` | Formal-to-runtime encoding, runtime-to-proof domain checks, and Dafny value marshalling. |
+| Input discovery | `src/generate.ts`, `src/spec.ts`, `src/runtime-spec.ts` | Formal and TypeScript-domain generation plus exact and JavaScript contract evaluation. |
 | Execution | `src/workers.ts`, `src/model-worker.ts`, `src/runtime-worker.ts` | Separate model and runtime child processes with deadlines. |
 | Audit engine | `src/audit.ts`, `src/shrink.ts`, `src/cases.ts` | Classification, comparison, shrinking, and replay persistence. |
 | Reporting | `src/report.ts`, `src/report-types.ts` | Human output, stable JSON structure, and exit-code policy. |
@@ -155,6 +184,28 @@ For a finite numeric bridge failure, Crosscheck can additionally execute an expl
 
 `--cases` limits successful representable main executions per target, not the number of raw candidates or auxiliary optional-presence and numeric-projection probes considered.
 
+### 4b. Generate and check TypeScript contract inputs
+
+When `contract` is selected, generation follows the same deterministic
+baseline, per-parameter, pairwise, and seeded schedule but constructs runtime
+values. Number-backed integers and naturals receive fractional, signed,
+non-finite, negative-zero, safe-integer, and ordinary values. Reals receive the
+full number edges; composite values receive them recursively.
+
+Each candidate is first evaluated against `requires` with JavaScript semantics.
+Calls in a contract delegate to the corresponding runtime export. For every
+accepted candidate, Crosscheck executes the target and evaluates each `ensures`
+clause against its returned value and post-call arguments. Bounded integer and
+natural quantifiers are enumerated completely, with a fixed work limit;
+unbounded or truncated quantification is never treated as true.
+
+Independently, the argument tuple is checked against the resolved verified
+parameter types. A fraction admitted by TypeScript `number` but resolved as
+formal `int`, for example, is a `proof-domain-gap`. Crosscheck retains the first
+such witness while continuing to search for the stronger
+`runtime-postcondition-violation`. Contract witnesses are executed but are not
+passed to the Dafny model.
+
 ### 5. Execute model and runtime
 
 The model and runtime run in separate Node child processes using a request/response JSON-lines protocol. They are isolated from the CLI process, but they are not security sandboxes.
@@ -188,6 +239,8 @@ Crosscheck also compares encoded arguments before and after the call and checks 
 | --- | --- |
 | `input-domain` | The proof accepts an input that the TypeScript representation cannot encode faithfully. |
 | `input-representation-mismatch` | Rounding an exact input to its JavaScript `number` representation changes the returned result. |
+| `proof-domain-gap` | A TypeScript input satisfies runtime `requires` but lies outside the verified parameter domain. |
+| `runtime-postcondition-violation` | TypeScript throws, times out, or makes an `ensures` clause false after runtime `requires` succeeds. |
 | `result-mismatch` | Runtime and verified model return unequal exact values. |
 | `input-mutation` | JavaScript changes a caller-visible argument absent from the value model. |
 | `optional-presence` | JavaScript distinguishes omission from a property explicitly set to `undefined`. |
@@ -199,7 +252,15 @@ Optional record inputs receive one additional kind of probe. After the canonical
 
 Numeric projection probes retain both argument tuples: the exact formal values passed to the model and the rounded values passed to JavaScript. The report shows every changed numeric path. A projected result mismatch is remembered while the ordinary search continues, allowing a mismatch on faithfully represented inputs to take precedence; it is still stronger evidence than a domain-only witness.
 
-The current engine reports the first faithfully represented concrete issue found for each target. If none appears, an observed numeric-projection result mismatch precedes a valid unrepresentable domain witness. An incomplete comparison still yields `NOT CHECKED` rather than allowing an earlier auxiliary probe to hide it.
+Within a differential check, the current engine reports the first faithfully
+represented concrete issue found for each target. If none appears, an observed
+numeric-projection result mismatch precedes a valid unrepresentable domain
+witness. Within a contract check, a postcondition violation precedes the first
+proof-domain gap. When both checks are selected, a contract issue is returned
+before differential execution; a clean contract check proceeds to the
+differential check. Without an already established contract finding, an
+incomplete selected check yields `NOT CHECKED` rather than silently omitting
+that evidence.
 
 ### 7. Shrink and persist failures
 
@@ -207,7 +268,15 @@ Executable and input-domain witnesses currently pass through a deterministic, re
 
 Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the source and runtime entry hashes, formal and runtime targets, category, and encoded witness. Optional-presence and input-representation issues include both model and runtime representations in the identity. Content identity namespaces different audited code while remaining stable when byte-identical files move.
 
-Saved `lemmascript-crosscheck.case/v2` cases record the source and runtime entry paths and hashes, target, runtime export, issue category, arguments, and any representation variant. Replay restores the recorded runtime when none is supplied, includes alternate runtimes in generated commands, and refuses to run if either content hash has changed. An explicitly supplied module at a new path is accepted when its hash matches. Runtime identity currently covers the imported entry file, not its transitive dependencies.
+Contract witnesses are retained without shrinking so their TypeScript shape and
+domain failure remain exact. Saved `lemmascript-crosscheck.case/v2` cases record
+the source and runtime entry paths and hashes, target, runtime export, issue
+category, arguments, and any representation variant. Replay selects contract
+checking automatically for its two categories, restores the recorded runtime
+when none is supplied, includes alternate runtimes in generated commands, and
+refuses to run if either content hash has changed. An explicitly supplied module
+at a new path is accepted when its hash matches. Runtime identity currently
+covers the imported entry file, not its transitive dependencies.
 
 ## Semantic representations
 
@@ -265,7 +334,8 @@ A single-target report leads with the conclusion, witness, expected and actual b
 Reporting language follows these rules:
 
 - say “verified model,” not “oracle”;
-- say “proof-valid input,” not merely “test input”;
+- say “proof-valid input” for differential values and “precondition-valid
+  TypeScript input” for runtime contract values, not merely “test input”;
 - distinguish a formal-only domain witness from an executed JavaScript call;
 - show exact mathematical and runtime values when they differ;
 - never call sampled agreement “safe,” “passed,” or “proved”;

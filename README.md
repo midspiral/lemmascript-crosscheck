@@ -16,6 +16,8 @@ It currently finds:
 
 - integer precision, formal-input representation gaps, and result-changing input rounding;
 - exact-real versus binary floating-point differences;
+- TypeScript inputs admitted beyond the verified parameter domain;
+- false runtime postconditions on precondition-valid TypeScript inputs;
 - ordinary result mismatches;
 - caller-visible input mutation;
 - omitted properties versus properties set to `undefined`;
@@ -149,6 +151,43 @@ Result
 
 No fractional literal is involved. Every ordinary JavaScript `number` uses IEEE-754 binary64, including integer-looking values, and it has only 53 bits of integer precision. By the time `binarySearch` evaluates `arr[mid] === target`, the two distinct formal integers have become the same JavaScript number. Crosscheck finds this with a general type-directed numeric projection probe, not a binary-search or equality-operator special case.
 
+### Fractional TypeScript inputs outside the proof
+
+The same `binarySearch.ts` source has a second, opposite domain boundary. Its
+TypeScript signature accepts every JavaScript `number`, while the verified
+Dafny parameters are integers. A runtime contract audit generates from the
+TypeScript domain, evaluates `requires` and `ensures` with JavaScript semantics,
+and reports a precondition-valid fractional call that the proof does not cover:
+
+```sh
+LEMMASCRIPT=../LemmaScript node dist/src/cli.js \
+  ../LemmaScript/examples/binarySearch.ts --only binarySearch \
+  --checks contract --cases 40
+```
+
+```text
+binarySearch — ISSUE FOUND
+TypeScript accepts a precondition-valid input outside the verified domain.
+
+TypeScript witness
+  arr         [0.5]
+  target      0
+
+Outside verified domain
+  arr[0]      0.5
+
+JavaScript result
+  -1
+
+Runtime contract
+  The sampled call satisfied its postconditions, but the Dafny proof does not cover this input.
+```
+
+This leaves the Dafny program and proof unchanged. It identifies that the
+executable TypeScript function admits calls beyond the domain represented by
+that proof. A false `ensures` clause on a precondition-valid runtime input is
+reported separately as a TypeScript postcondition violation.
+
 ### Exact `bigint` operations
 
 The same audit over [LemmaScript's `bigintBits.ts`](https://github.com/midspiral/LemmaScript/blob/main/examples/bigintBits.ts) finds no mismatch in 40 generated inputs per target:
@@ -195,7 +234,8 @@ lemmascript-crosscheck <source.ts> [options]
   --only <name>          Check one exported verified function
   --runtime <module>     Execute a deployed module instead of the source
   --entry A=B            Map formal target A to runtime export B
-  --cases <count>        Proof-valid executions per target (default: 100)
+  --cases <count>        Accepted executions per target (default: 100)
+  --checks <list>        contract, differential, or both (default: differential)
   --seed <integer>       Deterministic generation seed (default: 17)
   --timeout <ms>         Per-call worker deadline (default: 2000)
   --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)
@@ -219,14 +259,21 @@ lemmascript-crosscheck src/search.ts \
 
 All exported targets are checked unless `--only` selects one. Multi-target runs use a compact summary by default; `--details` renders each complete finding.
 
+`--checks differential` performs the exact verified-model/runtime comparison
+described above. `--checks contract` samples the TypeScript runtime domain,
+runs inputs satisfying the runtime interpretation of `requires`, and checks
+`ensures` with JavaScript operators. Use `--checks contract,differential` to run
+both; the first contract issue takes precedence for that target. Replays select
+the check that originally recorded their issue automatically.
+
 ## Reports and exit codes
 
 Crosscheck separates its conclusion from the strength of its evidence:
 
 | Conclusion | Meaning |
 | --- | --- |
-| `ISSUE FOUND` | A replayed counterexample demonstrates a model/runtime disagreement. |
-| `NO ISSUE FOUND` | No disagreement appeared in the stated sampled or exhaustive scope. |
+| `ISSUE FOUND` | A replayed counterexample demonstrates a transfer, proof-domain, or runtime-contract issue. |
+| `NO ISSUE FOUND` | No issue appeared in the selected sampled or exhaustive scope. |
 | `NOT CHECKED` | Unsupported semantics or a tool/runtime failure prevented a comparison. |
 
 | Exit code | Meaning |
@@ -239,7 +286,11 @@ Use `--json` for the stable `lemmascript-crosscheck.report/v1` machine-readable 
 
 ## Replaying a counterexample
 
-Every issue is saved under a stable ten-character ID derived from the source and runtime contents, target mapping, category, and minimized witness. Crosscheck prints a complete replay command:
+Every issue is saved under a stable ten-character ID derived from the source
+and runtime contents, target mapping, category, and recorded witness.
+Differential witnesses are minimized when appropriate; runtime contract
+witnesses retain the TypeScript tuple that was executed. Crosscheck prints a
+complete replay command:
 
 ```sh
 lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts \
@@ -265,9 +316,15 @@ Targets currently report `NOT CHECKED` when they require unsupported behavior su
 - `havoc`, `assume`, or other nondeterministic model behavior;
 - preconditions outside the implemented typed-expression evaluator.
 
+Runtime contract checks support the same ordinary expression forms with
+JavaScript arithmetic, comparison, and equality semantics. Integer/natural
+quantifiers are supported when their finite bounds can be derived completely
+from the current input; an unbounded or excessively large quantifier is
+reported as `NOT CHECKED`.
+
 ## How an audit works
 
-For each selected target, Crosscheck:
+For each selected differential target, Crosscheck:
 
 1. asks LemmaScript for typed metadata and verifies the source with the Dafny backend;
 2. compiles the verified Dafny artifact into an executable model;
@@ -278,6 +335,12 @@ For each selected target, Crosscheck:
 7. shrinks and replays the first mismatch when appropriate, then saves a deterministic replay case.
 
 This independently tests transfer from the verified formal semantics to the executable JavaScript semantics. It does not replace LemmaScript's proof or prove the translator correct.
+
+For a runtime contract target, Crosscheck instead generates values from the
+executable TypeScript shapes—including fractions, `NaN`, infinities, and `-0`
+for `number`—filters them through the runtime `requires`, executes TypeScript,
+and evaluates the runtime `ensures`. It records either a false postcondition or
+the first precondition-valid value outside the verified parameter domain.
 
 ## Development
 

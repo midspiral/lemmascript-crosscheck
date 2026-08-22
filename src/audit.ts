@@ -6,19 +6,26 @@ import {
   optionalPresenceVariants,
   presentUndefinedPath,
   projectRuntime,
+  runtimeDomainFailure,
   type BridgeContext,
   type RuntimeEncodingFailure,
   type RuntimeEncodingResult,
+  type RuntimeDomainFailure,
   type RuntimeProjectionLoss,
   typeSupportReason,
 } from "./bridge.js";
-import { candidateCases } from "./generate.js";
+import { candidateCases, runtimeCandidateCases } from "./generate.js";
 import type { Ty, TypedFunction, TypedInfo } from "./ir.js";
 import { WorkerTimeoutError } from "./json-line-client.js";
 import { compileVerifiedDafny } from "./dafny-build.js";
 import { issueId, saveCase, type StoredCase } from "./cases.js";
-import type { AuditReport, Issue, IssueCategory, Provenance, TargetReport } from "./report-types.js";
+import type { AuditReport, CheckKind, Issue, IssueCategory, Provenance, TargetReport } from "./report-types.js";
 import { shrinkArgs } from "./shrink.js";
+import {
+  checkRuntimePostconditions,
+  RuntimeSpecUnsupported,
+  satisfiesRuntimePreconditions,
+} from "./runtime-spec.js";
 import { satisfiesPreconditions, SpecUnsupported } from "./spec.js";
 import { hashFile, verifyAndInspect } from "./toolchain.js";
 import { startWorkers, type AuditWorkers } from "./workers.js";
@@ -33,6 +40,7 @@ export interface AuditOptions {
   entries: ReadonlyMap<string, string>;
   replay?: StoredCase;
   saveCases: boolean;
+  checks?: ReadonlySet<CheckKind>;
   progress?: (phase: string) => void;
 }
 
@@ -41,8 +49,27 @@ interface DomainWitness {
   failure: RuntimeEncodingFailure;
 }
 
+interface RuntimeDomainWitness {
+  args: unknown[];
+  failure: RuntimeDomainFailure;
+  runtimeResult?: Encoded;
+  postconditionsSatisfied?: boolean;
+}
+
+interface RuntimeContractViolation {
+  args: unknown[];
+  runtimeResult?: Encoded;
+  runtimeError?: string;
+  postconditionClause?: number;
+}
+
+type DifferentialIssueCategory = Exclude<
+  IssueCategory,
+  "input-domain" | "proof-domain-gap" | "runtime-postcondition-violation"
+>;
+
 interface ExecutedIssue {
-  category: Exclude<IssueCategory, "input-domain">;
+  category: DifferentialIssueCategory;
   args: unknown[];
   modelResult?: string;
   runtimeResult?: Encoded;
@@ -136,6 +163,32 @@ export async function auditFile(source: string, options: AuditOptions): Promise<
 }
 
 export async function auditTarget(
+  fn: TypedFunction,
+  info: TypedInfo,
+  identity: AuditIdentity,
+  workers: AuditWorkers,
+  options: AuditOptions,
+): Promise<TargetReport> {
+  const replayContract = options.replay?.category === "proof-domain-gap"
+    || options.replay?.category === "runtime-postcondition-violation";
+  const checks = options.replay
+    ? new Set<CheckKind>([replayContract ? "contract" : "differential"])
+    : options.checks ?? new Set<CheckKind>(["differential"]);
+  if (checks.has("contract")) {
+    const contract = await auditRuntimeContractTarget(fn, info, identity, workers, options);
+    const taggedContract: TargetReport = { ...contract, checks: ["contract"] };
+    if (contract.conclusion !== "no-issue" || !checks.has("differential")) return taggedContract;
+    const differential = await auditDifferentialTarget(fn, info, identity, workers, options);
+    return {
+      ...differential,
+      checks: ["contract", "differential"],
+      contractCases: contract.cases,
+    };
+  }
+  return { ...await auditDifferentialTarget(fn, info, identity, workers, options), checks: ["differential"] };
+}
+
+async function auditDifferentialTarget(
   fn: TypedFunction,
   info: TypedInfo,
   identity: AuditIdentity,
@@ -456,6 +509,204 @@ export async function auditTarget(
   };
 }
 
+async function auditRuntimeContractTarget(
+  fn: TypedFunction,
+  info: TypedInfo,
+  identity: AuditIdentity,
+  workers: AuditWorkers,
+  options: AuditOptions,
+): Promise<TargetReport> {
+  const runtimeTarget = options.entries.get(fn.name) ?? fn.name;
+  const context: BridgeContext = {
+    declarations: new Map(info.typeDecls.map(declaration => [declaration.name, declaration])),
+  };
+  const unsupported = supportReason(fn, context);
+  if (unsupported) {
+    return notChecked(
+      fn.name,
+      runtimeTarget,
+      options,
+      `runtime contract target is unsupported: ${unsupported}`,
+      "Use a supported synchronous value type or extend the runtime contract bridge.",
+    );
+  }
+  const allCases = options.replay
+    ? [decode(options.replay.args) as unknown[]]
+    : runtimeCandidateCases(fn, info, options.cases, options.seed);
+  let checked = 0;
+  let domainWitness: RuntimeDomainWitness | undefined;
+  let incomplete: { reason: string; nextStep: string } | undefined;
+
+  const callRuntime = async (name: string, args: unknown[]): Promise<unknown> => {
+    let response: Record<string, unknown>;
+    try {
+      response = await workers.runtime.request({
+        type: "call",
+        target: options.entries.get(name) ?? name,
+        args: encode(args),
+      }, options.timeoutMs);
+    } catch (error) {
+      if (error instanceof WorkerTimeoutError) throw new RuntimeSpecUnsupported(`runtime predicate ${name} timed out`);
+      throw new RuntimeSpecUnsupported(`runtime predicate ${name} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (response.status !== "ok") {
+      throw new RuntimeSpecUnsupported(
+        `runtime predicate ${name} ${response.status === "threw" ? "threw" : "failed"}: ${String(response.error ?? response.reason ?? response.status)}`,
+      );
+    }
+    return decode(response.result as Encoded);
+  };
+
+  for (const args of allCases) {
+    if (!options.replay && checked >= options.cases) break;
+    let valid: boolean;
+    try {
+      valid = await satisfiesRuntimePreconditions(fn, args, info.constants, callRuntime, info.typeDecls);
+    } catch (error) {
+      incomplete = runtimeContractIncomplete("precondition", error);
+      break;
+    }
+    if (!valid) continue;
+    checked++;
+    const failure = runtimeArgumentsDomainFailure(fn, args, context);
+
+    let runtimeResponse: Record<string, unknown>;
+    try {
+      runtimeResponse = await workers.runtime.request({
+        type: "call",
+        target: runtimeTarget,
+        args: encode(args),
+      }, options.timeoutMs);
+    } catch (error) {
+      if (error instanceof WorkerTimeoutError) {
+        return await runtimeContractViolationReport(fn, runtimeTarget, identity, checked, options, {
+          args,
+          runtimeError: `<timeout after ${options.timeoutMs} ms>`,
+        });
+      }
+      incomplete = {
+        reason: `runtime contract worker failed: ${error instanceof Error ? error.message : String(error)}`,
+        nextStep: "Fix the runtime worker failure and rerun the contract audit.",
+      };
+      break;
+    }
+    if (runtimeResponse.status === "unsupported") {
+      incomplete = {
+        reason: String(runtimeResponse.reason ?? "runtime contract target is unsupported"),
+        nextStep: "Use a supported synchronous runtime target.",
+      };
+      break;
+    }
+    if (runtimeResponse.status === "error") {
+      const missingExport = runtimeResponse.kind === "missing-export";
+      incomplete = {
+        reason: String(runtimeResponse.error ?? "runtime contract worker failed"),
+        nextStep: missingExport
+          ? `Export ${runtimeTarget} from the runtime module, or correct the mapping with --entry ${fn.name}=<export>.`
+          : "Fix the runtime module failure and rerun the contract audit.",
+      };
+      break;
+    }
+    if (runtimeResponse.status === "threw") {
+      return await runtimeContractViolationReport(fn, runtimeTarget, identity, checked, options, {
+        args,
+        runtimeError: String(runtimeResponse.error ?? "JavaScript threw"),
+      });
+    }
+
+    const result = runtimeResponse.result as Encoded;
+    const after = decode(runtimeResponse.after as Encoded);
+    const postArgs = Array.isArray(after) ? after : args;
+    try {
+      const postcondition = await checkRuntimePostconditions(
+        fn,
+        postArgs,
+        decode(result),
+        info.constants,
+        callRuntime,
+        info.typeDecls,
+      );
+      if (postcondition.status === "failed") {
+        return await runtimeContractViolationReport(fn, runtimeTarget, identity, checked, options, {
+          args,
+          runtimeResult: result,
+          postconditionClause: postcondition.clause,
+        });
+      }
+      if (failure && !domainWitness) {
+        domainWitness = { args, failure, runtimeResult: result, postconditionsSatisfied: true };
+      }
+    } catch (error) {
+      if (failure) {
+        domainWitness ??= { args, failure, runtimeResult: result };
+        continue;
+      }
+      incomplete = runtimeContractIncomplete("postcondition", error);
+      break;
+    }
+  }
+
+  if (domainWitness) {
+    return await runtimeDomainIssueReport(fn, runtimeTarget, identity, checked, options, domainWitness);
+  }
+  if (incomplete) {
+    return notChecked(fn.name, runtimeTarget, options, incomplete.reason, incomplete.nextStep, checked);
+  }
+  if (checked === 0) {
+    return notChecked(
+      fn.name,
+      runtimeTarget,
+      options,
+      "no generated TypeScript input satisfied the runtime precondition",
+      "Increase --cases or strengthen the TypeScript-domain generator for this precondition.",
+    );
+  }
+  if (options.replay) {
+    return notChecked(
+      fn.name,
+      runtimeTarget,
+      options,
+      `replay ${options.replay.id} no longer reproduces ${options.replay.category}`,
+      "Record a new counterexample with the current source and Crosscheck version.",
+      checked,
+    );
+  }
+  return {
+    target: fn.name,
+    runtimeTarget,
+    conclusion: "no-issue",
+    evidence: fn.params.length === 0 ? "exhaustive" : "sampled",
+    cases: checked,
+    seed: options.seed,
+  };
+}
+
+function runtimeArgumentsDomainFailure(
+  fn: TypedFunction,
+  args: unknown[],
+  context: BridgeContext,
+): RuntimeDomainFailure | null {
+  for (let index = 0; index < fn.params.length; index++) {
+    const param = fn.params[index]!;
+    const failure = runtimeDomainFailure(param.ty, args[index], context, param.tsType, param.name);
+    if (failure) return failure;
+  }
+  return null;
+}
+
+function runtimeContractIncomplete(
+  phase: "precondition" | "postcondition",
+  error: unknown,
+): { reason: string; nextStep: string } {
+  const detail = error instanceof RuntimeSpecUnsupported
+    ? error.reason
+    : error instanceof Error ? error.message : String(error);
+  return {
+    reason: `runtime ${phase} semantics are unsupported: ${detail}`,
+    nextStep: `Extend the JavaScript ${phase} evaluator before drawing a runtime-contract conclusion.`,
+  };
+}
+
 function supportReason(fn: TypedFunction, context: BridgeContext): string | null {
   if (fn.typeParams.length) return "generic targets are not yet supported";
   if (fn.autohavoc || fn.bodyKinds.includes("havoc") || fn.bodyKinds.includes("assume")) {
@@ -577,6 +828,107 @@ async function issueReport(
   return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };
 }
 
+async function runtimeDomainIssueReport(
+  fn: TypedFunction,
+  runtimeTarget: string,
+  identity: AuditIdentity,
+  cases: number,
+  options: AuditOptions,
+  witness: RuntimeDomainWitness,
+): Promise<TargetReport> {
+  const args = encode(witness.args);
+  const id = issueId({
+    sourceSha256: identity.sourceSha256,
+    runtimeSha256: identity.runtimeSha256,
+    target: fn.name,
+    runtimeTarget,
+    category: "proof-domain-gap",
+    args,
+  });
+  const issue: Issue = {
+    id,
+    category: "proof-domain-gap",
+    summary: "TypeScript accepts a precondition-valid input outside the verified domain",
+    diagnosis: witness.failure.reason,
+    resolution: "Narrow and enforce the TypeScript input domain at runtime, or widen the formal type and proof to cover this value.",
+    args,
+    paramNames: fn.params.map(param => param.name),
+    argDisplays: witness.args.map(formatRuntimeInput),
+    runtimePath: witness.failure.path,
+    runtimeValue: encode(witness.failure.runtimeValue),
+    runtimeDisplay: formatRuntimeInput(witness.failure.runtimeValue),
+    ...(witness.runtimeResult === undefined ? {} : { runtimeResult: witness.runtimeResult }),
+    ...(witness.postconditionsSatisfied === undefined ? {} : {
+      postconditionsSatisfied: witness.postconditionsSatisfied,
+    }),
+  };
+  if (options.saveCases) await saveCase({
+    schema: "lemmascript-crosscheck.case/v2",
+    id,
+    source: identity.source,
+    sourceSha256: identity.sourceSha256,
+    runtime: identity.runtime,
+    runtimeSha256: identity.runtimeSha256,
+    target: fn.name,
+    runtimeTarget,
+    category: "proof-domain-gap",
+    args,
+  });
+  return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };
+}
+
+async function runtimeContractViolationReport(
+  fn: TypedFunction,
+  runtimeTarget: string,
+  identity: AuditIdentity,
+  cases: number,
+  options: AuditOptions,
+  observed: RuntimeContractViolation,
+): Promise<TargetReport> {
+  const args = encode(observed.args);
+  const id = issueId({
+    sourceSha256: identity.sourceSha256,
+    runtimeSha256: identity.runtimeSha256,
+    target: fn.name,
+    runtimeTarget,
+    category: "runtime-postcondition-violation",
+    args,
+  });
+  const threw = observed.runtimeError !== undefined;
+  const issue: Issue = {
+    id,
+    category: "runtime-postcondition-violation",
+    summary: threw
+      ? "TypeScript does not return on a precondition-valid runtime input"
+      : "TypeScript violates a postcondition on a precondition-valid runtime input",
+    diagnosis: threw
+      ? `The runtime could not produce a result required by the contract: ${observed.runtimeError}`
+      : `Runtime postcondition clause ${observed.postconditionClause ?? "<unknown>"} evaluated to false using JavaScript semantics.`,
+    resolution: "Repair the TypeScript implementation or strengthen and enforce its runtime precondition.",
+    args,
+    paramNames: fn.params.map(param => param.name),
+    argDisplays: observed.args.map(formatRuntimeInput),
+    ...(observed.runtimeResult === undefined ? {} : { runtimeResult: observed.runtimeResult }),
+    ...(observed.runtimeError === undefined ? {} : { runtimeError: observed.runtimeError }),
+    ...(observed.postconditionClause === undefined ? {} : {
+      postconditionClause: observed.postconditionClause,
+    }),
+  };
+  if (options.saveCases) await saveCase({
+    schema: "lemmascript-crosscheck.case/v2",
+    id,
+    source: identity.source,
+    sourceSha256: identity.sourceSha256,
+    runtime: identity.runtime,
+    runtimeSha256: identity.runtimeSha256,
+    target: fn.name,
+    runtimeTarget,
+    category: "runtime-postcondition-violation",
+    args,
+  });
+  return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };
+}
+
 async function domainIssueReport(
   fn: TypedFunction,
   runtimeTarget: string,
@@ -616,7 +968,7 @@ async function domainIssueReport(
   return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };
 }
 
-function issueLanguage(category: Exclude<IssueCategory, "input-domain">, returnTy: Ty): { summary: string; diagnosis: string; resolution: string } {
+function issueLanguage(category: DifferentialIssueCategory, returnTy: Ty): { summary: string; diagnosis: string; resolution: string } {
   if (category === "input-representation-mismatch") return {
     summary: "JavaScript input rounding changes the result",
     diagnosis: "JavaScript's IEEE-754 number representation rounds an exact formal numeric input before the function executes; distinct formal values can therefore collapse to the same runtime value.",

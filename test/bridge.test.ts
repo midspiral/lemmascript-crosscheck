@@ -6,6 +6,7 @@ import {
   optionalPresenceVariants,
   presentUndefinedPath,
   projectRuntime,
+  runtimeDomainFailure,
 } from "../src/bridge.js";
 import { MAX_SAFE_INTEGER } from "../src/generate.js";
 import { Rational } from "../src/rational.js";
@@ -53,6 +54,15 @@ test("bigint-backed integers stay exact", () => {
 test("dyadic reals encode exactly while one tenth does not", () => {
   assert.deepEqual(encodeRuntime({ kind: "real" }, new Rational(3n, 2n), context), { ok: true, value: 1.5 });
   assert.equal(encodeRuntime({ kind: "real" }, new Rational(1n, 10n), context).ok, false);
+});
+
+test("fractional TypeScript numbers expose a verified integer-domain gap", () => {
+  assert.equal(runtimeDomainFailure({ kind: "int" }, 2, context, "number", "target"), null);
+  assert.deepEqual(runtimeDomainFailure({ kind: "int" }, 0.5, context, "number", "target"), {
+    path: "target",
+    reason: "fractional TypeScript number is outside the verified int domain",
+    runtimeValue: 0.5,
+  });
 });
 
 test("optional record absence has an omitted canonical encoding and a present-undefined variant", () => {

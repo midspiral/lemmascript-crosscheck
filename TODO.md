@@ -145,6 +145,10 @@ These runs are truthful sampled agreements, but they are not strong evidence abo
 
 `src/spec.ts` currently rejects every `forall` and `exists`. Quantified postconditions do not block differential execution, but quantified preconditions prevent Crosscheck from deciding whether generated inputs are proof-valid.
 
+The separate JavaScript contract evaluator in `src/runtime-spec.ts` already
+enumerates bounded runtime quantifiers. This item remains necessary for the
+exact formal precondition path; do not substitute JavaScript evaluation there.
+
 ### Observed blocked targets
 
 - Rallly `scorePoll` uses bounded `forall` preconditions over its input array.

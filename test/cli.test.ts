@@ -7,6 +7,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import type { AuditReport } from "../src/report-types.js";
 
+test("help exposes selectable runtime contract checks", () => {
+  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const result = spawnSync(process.execPath, ["--import", "tsx", cliPath, "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--checks <list>\s+contract, differential, or both/);
+});
+
 test("fatal JSON output remains a complete v1 target report", () => {
   const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
   const missingSource = path.join(tmpdir(), `lemmascript-crosscheck-missing-${process.pid}.ts`);

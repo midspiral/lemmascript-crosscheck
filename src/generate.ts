@@ -3,6 +3,7 @@ import type { Ty, TypeDeclInfo, TypedFunction, TypedInfo } from "./ir.js";
 import { Rational } from "./rational.js";
 
 export const MAX_SAFE_INTEGER = 9_007_199_254_740_991n;
+const LONE_SURROGATE = String.fromCharCode(0xd800);
 
 interface GenerationContext {
   declarations: ReadonlyMap<string, TypeDeclInfo>;
@@ -77,6 +78,185 @@ export function candidateCases(fn: TypedFunction, info: TypedInfo, randomCount: 
     cases.push(fn.params.map(parameter => randomValue(parameter.ty, context, rng, 0)));
   }
   return unique(cases);
+}
+
+/**
+ * Generate values admitted by the executable TypeScript signature rather than
+ * only values admitted by the verified model. In particular, a TypeScript
+ * `number` whose formal type is `int` or `nat` still admits fractional and
+ * non-finite IEEE-754 values at runtime. Contract audits use these candidates
+ * to find calls that the source signature accepts but the proof does not
+ * cover.
+ */
+export function runtimeCandidateCases(fn: TypedFunction, info: TypedInfo, randomCount: number, seed: number): unknown[][] {
+  if (fn.params.length === 0) return [[]];
+  const context: GenerationContext = {
+    declarations: new Map(info.typeDecls.map(declaration => [declaration.name, declaration])),
+    active: new Set(),
+  };
+  const perParam = fn.params.map(parameter => runtimeEdgeValues(parameter.ty, context, parameter.tsType));
+  const baseline = fn.params.map((parameter, index) => {
+    const values = perParam[index];
+    return values && values.length > 0 ? values[0] : runtimeBaselineValue(parameter.ty, context, parameter.tsType);
+  });
+  const cases: unknown[][] = [baseline];
+
+  for (let param = 0; param < fn.params.length; param++) {
+    for (const value of perParam[param] ?? []) {
+      const args = [...baseline];
+      args[param] = value;
+      cases.push(args);
+    }
+  }
+
+  if (fn.params.length >= 2) {
+    for (let leftIndex = 0; leftIndex < fn.params.length; leftIndex++) {
+      for (let rightIndex = leftIndex + 1; rightIndex < fn.params.length; rightIndex++) {
+        const left = (perParam[leftIndex] ?? []).slice(0, 12);
+        const right = (perParam[rightIndex] ?? []).slice(0, 12);
+        for (const leftValue of left) {
+          for (const rightValue of right) {
+            const args = [...baseline];
+            args[leftIndex] = leftValue;
+            args[rightIndex] = rightValue;
+            cases.push(args);
+          }
+        }
+      }
+    }
+  }
+
+  const rng = new Rng(seed);
+  for (let index = 0; index < Math.max(randomCount * 4, 40); index++) {
+    cases.push(fn.params.map(parameter => runtimeRandomValue(parameter.ty, context, parameter.tsType, rng, 0)));
+  }
+  return unique(cases);
+}
+
+function runtimeEdgeValues(ty: Ty, context: GenerationContext, tsType?: string): unknown[] {
+  switch (ty.kind) {
+    case "bool": return [false, true];
+    case "int": case "nat":
+      return ty.big ? integerEdges(false) : runtimeNumberEdges();
+    case "real": return runtimeNumberEdges();
+    case "string": return ty.values?.length ? [...ty.values] : ["", "a", "0", LONE_SURROGATE, "é", "😀"];
+    case "array": return runtimeArrayEdges(ty.elem, context);
+    case "tuple": {
+      const baseline = ty.elems.map(elem => runtimeBaselineValue(elem, context));
+      const values: unknown[] = [baseline];
+      for (let index = 0; index < ty.elems.length; index++) {
+        for (const edge of runtimeEdgeValues(ty.elems[index]!, context).slice(1, 5)) {
+          const tuple = [...baseline];
+          tuple[index] = edge;
+          values.push(tuple);
+        }
+      }
+      return values;
+    }
+    case "optional": return [undefined, ...runtimeEdgeValues(ty.inner, context, tsType).slice(0, 6)];
+    case "set": return [new Set(), ...runtimeEdgeValues(ty.elem, context).slice(0, 5).map(value => new Set([value]))];
+    case "map": {
+      const keys = runtimeEdgeValues(ty.key, context).slice(0, 4);
+      const values = runtimeEdgeValues(ty.value, context).slice(0, 4);
+      const entries = keys.map((key, index) => [key, values[index % Math.max(values.length, 1)]] as [unknown, unknown]);
+      return tsType?.trim().startsWith("Map<")
+        ? [new Map(), ...entries.map(entry => new Map([entry]))]
+        : [{}, ...entries.map(([key, value]) => ({ [String(key)]: value }))];
+    }
+    case "user": return runtimeUserEdges(ty.name, context);
+    case "void": case "fn": case "unknown": return [];
+  }
+}
+
+function runtimeNumberEdges(): number[] {
+  return [
+    0, 0.5, -0.5, 0.1, 0.2, 0.3, 0.1 + 0.2, -0,
+    NaN, Infinity, -Infinity, 1, -1, Number.MIN_VALUE,
+    Number.MAX_VALUE, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1,
+  ];
+}
+
+function runtimeArrayEdges(elem: Ty, context: GenerationContext): unknown[] {
+  const elements = runtimeEdgeValues(elem, context);
+  const arrays: unknown[][] = [[]];
+  for (const element of elements.slice(0, 16)) arrays.push([element]);
+  for (let index = 0; index + 1 < Math.min(elements.length, 12); index++) {
+    arrays.push([elements[index], elements[index + 1]]);
+  }
+  if (elem.kind === "int" || elem.kind === "nat" || elem.kind === "real") {
+    arrays.push([0.1, 0.2, 0.3], [0.1, 0.1 + 0.2], [-0.5, 0, 0.5]);
+  }
+  return unique(arrays);
+}
+
+function runtimeBaselineValue(ty: Ty, context: GenerationContext, tsType?: string): unknown {
+  const edges = runtimeEdgeValues(ty, context, tsType);
+  if (edges.length > 0) return edges[0];
+  throw new Error(`no runtime generator for ${ty.kind}`);
+}
+
+function runtimeRandomValue(
+  ty: Ty,
+  context: GenerationContext,
+  tsType: string | undefined,
+  rng: Rng,
+  depth: number,
+): unknown {
+  if (depth > 4) return runtimeBaselineValue(ty, context, tsType);
+  switch (ty.kind) {
+    case "bool": return rng.next() < 0.5;
+    case "int": case "nat": {
+      if (ty.big) {
+        const magnitude = BigInt(rng.int(0, 1_000_000));
+        return rng.next() < 0.5 ? magnitude : -magnitude;
+      }
+      if (rng.next() < 0.3) return rng.pick(runtimeNumberEdges());
+      return rng.int(-1_000_000, 1_000_000) / rng.pick([1, 2, 4, 10, 100]);
+    }
+    case "real":
+      if (rng.next() < 0.3) return rng.pick(runtimeNumberEdges());
+      return rng.int(-1_000_000, 1_000_000) / rng.pick([1, 2, 4, 10, 100]);
+    case "string": {
+      if (ty.values?.length) return rng.pick(ty.values);
+      const alphabet = ["a", "b", "0", LONE_SURROGATE, "é", "😀"];
+      return Array.from({ length: rng.int(0, 8) }, () => rng.pick(alphabet)).join("");
+    }
+    case "array": {
+      const values = Array.from(
+        { length: rng.int(0, 7) },
+        () => runtimeRandomValue(ty.elem, context, undefined, rng, depth + 1),
+      );
+      if (rng.next() < 0.35 && (ty.elem.kind === "int" || ty.elem.kind === "nat" || ty.elem.kind === "real")) {
+        values.sort((left, right) => Number(left) - Number(right));
+      }
+      return values;
+    }
+    case "tuple": return ty.elems.map(elem => runtimeRandomValue(elem, context, undefined, rng, depth + 1));
+    case "optional": return rng.next() < 0.25
+      ? undefined
+      : runtimeRandomValue(ty.inner, context, tsType, rng, depth + 1);
+    case "set": {
+      const output = new Set<unknown>();
+      for (let index = 0; index < rng.int(0, 5); index++) {
+        output.add(runtimeRandomValue(ty.elem, context, undefined, rng, depth + 1));
+      }
+      return output;
+    }
+    case "map": {
+      const entries: [unknown, unknown][] = [];
+      for (let index = 0; index < rng.int(0, 5); index++) {
+        entries.push([
+          runtimeRandomValue(ty.key, context, undefined, rng, depth + 1),
+          runtimeRandomValue(ty.value, context, undefined, rng, depth + 1),
+        ]);
+      }
+      return tsType?.trim().startsWith("Map<")
+        ? new Map(entries)
+        : Object.fromEntries(entries.map(([key, value]) => [String(key), value]));
+    }
+    case "user": return runtimeRandomUser(ty.name, context, rng, depth + 1);
+    case "void": case "fn": case "unknown": throw new Error(`no runtime generator for ${ty.kind}`);
+  }
 }
 
 export function edgeValues(ty: Ty, context: GenerationContext): unknown[] {
@@ -242,6 +422,51 @@ function userEdges(name: string, outer: GenerationContext): unknown[] {
   }
 }
 
+function runtimeUserEdges(name: string, outer: GenerationContext): unknown[] {
+  const declaration = outer.declarations.get(name);
+  if (!declaration || outer.active.has(name)) return [];
+  const context = { ...outer, active: new Set(outer.active).add(name) };
+  switch (declaration.kind) {
+    case "string-union": return declaration.values ? [...declaration.values] : [];
+    case "alias": return declaration.aliasOfTy
+      ? runtimeEdgeValues(declaration.aliasOfTy, context, declaration.aliasOf)
+      : [];
+    case "record": {
+      const fields = declaration.fields ?? [];
+      const baseline = Object.fromEntries(fields.map(field => [
+        field.name,
+        field.type ? runtimeBaselineValue(field.type, context, field.tsType) : undefined,
+      ]));
+      const output: unknown[] = [baseline];
+      for (const field of fields) {
+        if (!field.type) continue;
+        for (const edge of runtimeEdgeValues(field.type, context, field.tsType).slice(1, 5)) {
+          output.push({ ...baseline, [field.name]: edge });
+        }
+      }
+      return output;
+    }
+    case "discriminated-union": {
+      const discriminant = declaration.discriminant;
+      if (!discriminant) return [];
+      if (discriminant === "__isArray__") {
+        return (declaration.variants ?? []).flatMap(variant => {
+          const field = variant.fields[0];
+          return field?.type ? runtimeEdgeValues(field.type, context, field.tsType).slice(0, 4) : [];
+        });
+      }
+      return (declaration.variants ?? []).map(variant => Object.fromEntries([
+        [discriminant, variant.name],
+        ...variant.fields.filter(field => field.name !== discriminant).map(field => [
+          field.name,
+          field.type ? runtimeBaselineValue(field.type, context, field.tsType) : undefined,
+        ]),
+      ]));
+    }
+    case "opaque": return [];
+  }
+}
+
 function randomUser(name: string, outer: GenerationContext, rng: Rng, depth: number): unknown {
   const declaration = outer.declarations.get(name);
   if (!declaration || outer.active.has(name)) throw new Error(`cannot generate user type ${name}`);
@@ -273,6 +498,40 @@ function randomUser(name: string, outer: GenerationContext, rng: Rng, depth: num
       ]);
     }
     case "opaque": throw new Error(`cannot generate opaque type ${name}`);
+  }
+}
+
+function runtimeRandomUser(name: string, outer: GenerationContext, rng: Rng, depth: number): unknown {
+  const declaration = outer.declarations.get(name);
+  if (!declaration || outer.active.has(name)) throw new Error(`cannot generate runtime user type ${name}`);
+  const context = { ...outer, active: new Set(outer.active).add(name) };
+  switch (declaration.kind) {
+    case "string-union": return rng.pick(declaration.values ?? []);
+    case "alias":
+      if (!declaration.aliasOfTy) throw new Error(`alias ${name} has no target`);
+      return runtimeRandomValue(declaration.aliasOfTy, context, declaration.aliasOf, rng, depth);
+    case "record": return Object.fromEntries((declaration.fields ?? []).map(field => [
+      field.name,
+      field.type ? runtimeRandomValue(field.type, context, field.tsType, rng, depth) : undefined,
+    ]));
+    case "discriminated-union": {
+      const variant = rng.pick(declaration.variants ?? []);
+      const discriminant = declaration.discriminant;
+      if (!discriminant) throw new Error(`union ${name} has no discriminant`);
+      if (discriminant === "__isArray__") {
+        const field = variant.fields[0];
+        if (!field?.type) throw new Error(`variant ${variant.name} has no payload`);
+        return runtimeRandomValue(field.type, context, field.tsType, rng, depth);
+      }
+      return Object.fromEntries([
+        [discriminant, variant.name],
+        ...variant.fields.filter(field => field.name !== discriminant).map(field => [
+          field.name,
+          field.type ? runtimeRandomValue(field.type, context, field.tsType, rng, depth) : undefined,
+        ]),
+      ]);
+    }
+    case "opaque": throw new Error(`cannot generate opaque runtime type ${name}`);
   }
 }
 

@@ -160,6 +160,7 @@ test("number input collisions expose an actual projected result mismatch", async
 
   const replay = await auditTarget(searchFn, searchInfo, identity, workers, {
     ...options,
+    checks: new Set(["contract", "differential"]),
     replay: {
       schema: "lemmascript-crosscheck.case/v2",
       id: report.issue!.id,
@@ -176,4 +177,99 @@ test("number input collisions expose an actual projected result mismatch", async
   });
   assert.equal(replay.issue?.category, "input-representation-mismatch");
   assert.equal(replay.issue?.id, report.issue?.id);
+});
+
+test("contract audits expose fractional inputs accepted by binary search but excluded by its proof", async () => {
+  const contractSearch: TypedFunction = {
+    ...searchFn,
+    requires: [{
+      kind: "call",
+      fn: { kind: "var", name: "sorted", ty: { kind: "unknown" } },
+      args: [{ kind: "var", name: "arr", ty: { kind: "array", elem: { kind: "int" } } }],
+      ty: { kind: "bool" },
+    }],
+    ensures: [{
+      kind: "binop",
+      op: ">=",
+      left: { kind: "var", name: "\\result", ty: { kind: "int" } },
+      right: { kind: "num", value: -1, ty: { kind: "int" } },
+      ty: { kind: "bool" },
+    }],
+  };
+  const contractInfo: TypedInfo = { ...info, functions: [contractSearch] };
+  const runtime = client(async message => {
+    const args = decode(message.args as Encoded) as unknown[];
+    if (message.target === "sorted") {
+      const arr = args[0] as number[];
+      const result = arr.every((value, index) => index === 0 || arr[index - 1]! <= value);
+      return { status: "ok", result: encode(result), before: message.args, after: message.args, console: [] };
+    }
+    const [arr, target] = args as [number[], number];
+    const result = arr.findIndex(value => value === target);
+    return { status: "ok", result: encode(result), before: message.args, after: message.args, console: [] };
+  });
+  const model = client(async () => { throw new Error("contract audit must not execute the Dafny model"); });
+  const workers: AuditWorkers = { model, runtime, close() {} };
+
+  const report = await auditTarget(contractSearch, contractInfo, identity, workers, {
+    ...options,
+    cases: 20,
+    checks: new Set(["contract"]),
+  });
+
+  assert.equal(report.issue?.category, "proof-domain-gap");
+  assert.equal(report.issue?.runtimePath, "arr[0]");
+  assert.deepEqual(decode(report.issue!.args), [[0.5], 0]);
+  assert.equal(report.issue?.postconditionsSatisfied, true);
+
+  const replay = await auditTarget(contractSearch, contractInfo, identity, workers, {
+    ...options,
+    replay: {
+      schema: "lemmascript-crosscheck.case/v2",
+      id: report.issue!.id,
+      source: identity.source,
+      sourceSha256: identity.sourceSha256,
+      runtime: identity.runtime,
+      runtimeSha256: identity.runtimeSha256,
+      target: contractSearch.name,
+      runtimeTarget: contractSearch.name,
+      category: "proof-domain-gap",
+      args: report.issue!.args,
+    },
+  });
+  assert.equal(replay.issue?.category, "proof-domain-gap");
+  assert.equal(replay.issue?.id, report.issue?.id);
+});
+
+test("contract audits report a false TypeScript postcondition directly", async () => {
+  const target: TypedFunction = {
+    ...arrayFn,
+    name: "bad",
+    params: [{ name: "x", ty: { kind: "int" }, tsType: "number" }],
+    ensures: [{
+      kind: "binop",
+      op: ">=",
+      left: { kind: "var", name: "\\result", ty: { kind: "int" } },
+      right: { kind: "var", name: "x", ty: { kind: "int" } },
+      ty: { kind: "bool" },
+    }],
+  };
+  const targetInfo: TypedInfo = { ...info, functions: [target] };
+  const runtime = client(async message => ({
+    status: "ok",
+    result: encode(-1),
+    before: message.args,
+    after: message.args,
+    console: [],
+  }));
+  const workers: AuditWorkers = { model: modelClient(), runtime, close() {} };
+
+  const report = await auditTarget(target, targetInfo, identity, workers, {
+    ...options,
+    checks: new Set(["contract"]),
+  });
+
+  assert.equal(report.issue?.category, "runtime-postcondition-violation");
+  assert.equal(report.issue?.postconditionClause, 1);
+  assert.deepEqual(decode(report.issue!.args), [0]);
 });

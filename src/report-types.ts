@@ -2,11 +2,14 @@ import type { Encoded } from "./codec.js";
 
 export type Conclusion = "issue" | "no-issue" | "not-checked";
 export type EvidenceKind = "counterexample" | "sampled" | "exhaustive" | "tool-failure";
+export type CheckKind = "contract" | "differential";
 
 export type IssueCategory =
   | "result-mismatch"
   | "input-domain"
   | "input-representation-mismatch"
+  | "proof-domain-gap"
+  | "runtime-postcondition-violation"
   | "input-mutation"
   | "optional-presence"
   | "console-output"
@@ -36,6 +39,11 @@ export interface Issue {
   formalPath?: string;
   formalValue?: Encoded;
   formalDisplay?: string;
+  runtimePath?: string;
+  runtimeValue?: Encoded;
+  runtimeDisplay?: string;
+  postconditionClause?: number;
+  postconditionsSatisfied?: boolean;
   console?: string[];
   runtimeError?: string;
 }
@@ -47,6 +55,8 @@ export interface TargetReport {
   evidence: EvidenceKind;
   cases: number;
   seed: number;
+  checks?: CheckKind[];
+  contractCases?: number;
   issue?: Issue;
   reason?: string;
   nextStep?: string;

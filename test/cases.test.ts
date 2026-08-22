@@ -88,6 +88,21 @@ test("v2 replay cases persist runtime identity and reject v1 cases", async t => 
   await saveCase(projected);
   assert.deepEqual(await loadCase(projectedId), projected);
 
+  const runtimeArgs = encode([[0.5], 0]);
+  const runtimeId = issueId({
+    ...baseIdentity,
+    category: "proof-domain-gap",
+    args: runtimeArgs,
+  });
+  const runtimeDomain: StoredCase = {
+    ...stored,
+    id: runtimeId,
+    category: "proof-domain-gap",
+    args: runtimeArgs,
+  };
+  await saveCase(runtimeDomain);
+  assert.deepEqual(await loadCase(runtimeId), runtimeDomain);
+
   const oldId = "0123456789";
   await mkdir(root, { recursive: true });
   await writeFile(path.join(root, `${oldId}.json`), JSON.stringify({ ...stored, schema: "lemmascript-crosscheck.case/v1", id: oldId }));

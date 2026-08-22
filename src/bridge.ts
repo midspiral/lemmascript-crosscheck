@@ -33,6 +33,12 @@ export interface RuntimeProjection {
 
 export type RuntimeProjectionResult = RuntimeProjection | RuntimeEncodingFailure;
 
+export interface RuntimeDomainFailure {
+  path: string;
+  reason: string;
+  runtimeValue: unknown;
+}
+
 export function encodeRuntime(
   ty: Ty,
   modelValue: unknown,
@@ -58,6 +64,123 @@ export function projectRuntime(
   const losses: RuntimeProjectionLoss[] = [];
   const encoded = encodeRuntimeValue(ty, modelValue, context, tsType, path, losses);
   return encoded.ok ? { ...encoded, losses } : encoded;
+}
+
+/** Return the first executable value that lies outside the verified type. */
+export function runtimeDomainFailure(
+  ty: Ty,
+  runtimeValue: unknown,
+  context: BridgeContext,
+  tsType?: string,
+  path = "value",
+): RuntimeDomainFailure | null {
+  switch (ty.kind) {
+    case "bool":
+      return typeof runtimeValue === "boolean" ? null : domainFailure(path, "runtime value is not boolean", runtimeValue);
+    case "int":
+    case "nat": {
+      if (ty.big) {
+        if (typeof runtimeValue !== "bigint") {
+          return domainFailure(path, `TypeScript value is not a bigint covered by the verified ${ty.kind}`, runtimeValue);
+        }
+        return ty.kind === "nat" && runtimeValue < 0n
+          ? domainFailure(path, "negative bigint is outside the verified natural-number domain", runtimeValue)
+          : null;
+      }
+      if (typeof runtimeValue !== "number") {
+        return domainFailure(path, `TypeScript value is not a number covered by the verified ${ty.kind}`, runtimeValue);
+      }
+      if (!Number.isFinite(runtimeValue)) {
+        return domainFailure(path, `non-finite TypeScript number is outside the verified ${ty.kind} domain`, runtimeValue);
+      }
+      if (Object.is(runtimeValue, -0)) {
+        return domainFailure(path, `TypeScript -0 is not distinguished by the verified ${ty.kind} domain`, runtimeValue);
+      }
+      if (!Number.isInteger(runtimeValue)) {
+        return domainFailure(path, `fractional TypeScript number is outside the verified ${ty.kind} domain`, runtimeValue);
+      }
+      if (ty.kind === "nat" && runtimeValue < 0) {
+        return domainFailure(path, "negative TypeScript number is outside the verified natural-number domain", runtimeValue);
+      }
+      return null;
+    }
+    case "real":
+      if (typeof runtimeValue !== "number" || !Number.isFinite(runtimeValue)) {
+        return domainFailure(path, "non-finite TypeScript number is outside the verified real domain", runtimeValue);
+      }
+      return Object.is(runtimeValue, -0)
+        ? domainFailure(path, "TypeScript -0 is not distinguished by the verified real domain", runtimeValue)
+        : null;
+    case "string": {
+      if (typeof runtimeValue !== "string") return domainFailure(path, "runtime value is not a string", runtimeValue);
+      if (ty.values && !ty.values.includes(runtimeValue)) {
+        return domainFailure(path, "runtime string is outside the verified finite-string domain", runtimeValue);
+      }
+      for (let index = 0; index < runtimeValue.length; index++) {
+        const unit = runtimeValue.charCodeAt(index);
+        if (unit < 0xd800 || unit > 0xdfff) continue;
+        const point = runtimeValue.codePointAt(index);
+        if (point === undefined || point <= 0xffff) {
+          return domainFailure(path, "runtime string contains a lone UTF-16 surrogate", runtimeValue);
+        }
+        index++;
+      }
+      return null;
+    }
+    case "array": {
+      if (!Array.isArray(runtimeValue)) return domainFailure(path, "runtime value is not an array", runtimeValue);
+      for (let index = 0; index < runtimeValue.length; index++) {
+        if (!(index in runtimeValue)) return domainFailure(`${path}[${index}]`, "sparse array hole has no verified value", undefined);
+        const nested = runtimeDomainFailure(ty.elem, runtimeValue[index], context, undefined, `${path}[${index}]`);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    case "tuple": {
+      if (!Array.isArray(runtimeValue) || runtimeValue.length !== ty.elems.length) {
+        return domainFailure(path, `runtime value is not a ${ty.elems.length}-tuple`, runtimeValue);
+      }
+      for (let index = 0; index < ty.elems.length; index++) {
+        const nested = runtimeDomainFailure(ty.elems[index]!, runtimeValue[index], context, undefined, `${path}[${index}]`);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    case "optional":
+      return runtimeValue === undefined || runtimeValue === null
+        ? null
+        : runtimeDomainFailure(ty.inner, runtimeValue, context, tsType, path);
+    case "set": {
+      const values = runtimeValue instanceof Set ? [...runtimeValue] : Array.isArray(runtimeValue) ? runtimeValue : null;
+      if (!values) return domainFailure(path, "runtime value is not a set", runtimeValue);
+      for (let index = 0; index < values.length; index++) {
+        const nested = runtimeDomainFailure(ty.elem, values[index], context, undefined, `${path}{${index}}`);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    case "map": {
+      const entries = runtimeValue instanceof Map
+        ? [...runtimeValue.entries()]
+        : runtimeValue && typeof runtimeValue === "object" && !Array.isArray(runtimeValue)
+          ? Object.entries(runtimeValue)
+          : null;
+      if (!entries) return domainFailure(path, "runtime value is not a map or record", runtimeValue);
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]!;
+        const key = runtimeObjectKey(ty.key, entry[0]);
+        const keyFailure = runtimeDomainFailure(ty.key, key, context, undefined, `${path}.key${index}`);
+        if (keyFailure) return keyFailure;
+        const valueFailure = runtimeDomainFailure(ty.value, entry[1], context, undefined, `${path}.value${index}`);
+        if (valueFailure) return valueFailure;
+      }
+      return null;
+    }
+    case "user": return runtimeUserDomainFailure(ty.name, runtimeValue, context, path, new Set());
+    case "void": return domainFailure(path, "void has no runtime input domain", runtimeValue);
+    case "fn": return domainFailure(path, "function-valued runtime input is outside the verified bridge", runtimeValue);
+    case "unknown": return domainFailure(path, "runtime input has no resolved verified type", runtimeValue);
+  }
 }
 
 function encodeRuntimeValue(
@@ -590,6 +713,99 @@ function cloneRuntimeValue(value: unknown): unknown {
   if (value instanceof Map) return new Map([...value].map(([key, entry]) => [cloneRuntimeValue(key), cloneRuntimeValue(entry)]));
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cloneRuntimeValue(entry)]));
   return value;
+}
+
+function runtimeUserDomainFailure(
+  name: string,
+  value: unknown,
+  context: BridgeContext,
+  path: string,
+  seen: ReadonlySet<string>,
+): RuntimeDomainFailure | null {
+  if (seen.has(name)) return domainFailure(path, `recursive verified type ${name} is unsupported`, value);
+  const declaration = context.declarations.get(name);
+  if (!declaration) return domainFailure(path, `missing verified declaration for ${name}`, value);
+  const nestedSeen = new Set(seen).add(name);
+  if (declaration.kind === "string-union") {
+    return typeof value === "string" && declaration.values?.includes(value)
+      ? null
+      : domainFailure(path, `runtime value is not a member of verified type ${name}`, value);
+  }
+  if (declaration.kind === "alias") {
+    return declaration.aliasOfTy
+      ? runtimeDomainFailure(declaration.aliasOfTy, value, context, declaration.aliasOf, path)
+      : domainFailure(path, `alias ${name} has no resolved verified type`, value);
+  }
+  if (declaration.kind === "opaque") return domainFailure(path, `opaque verified type ${name} is unsupported`, value);
+  if (declaration.kind === "record") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return domainFailure(path, `runtime value is not a ${name} record`, value);
+    }
+    for (const field of declaration.fields ?? []) {
+      if (!field.type) return domainFailure(`${path}.${field.name}`, "record field has no resolved verified type", value);
+      const nested = field.type.kind === "user"
+        ? runtimeUserDomainFailure(
+            field.type.name,
+            (value as Record<string, unknown>)[field.name],
+            context,
+            `${path}.${field.name}`,
+            nestedSeen,
+          )
+        : runtimeDomainFailure(
+            field.type,
+            (value as Record<string, unknown>)[field.name],
+            context,
+            field.tsType,
+            `${path}.${field.name}`,
+          );
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (declaration.discriminant === "__isArray__") {
+    const variant = declaration.variants?.find(candidate => candidate.name === (Array.isArray(value) ? "ArrayBranch" : "NonArrayBranch"));
+    const field = variant?.fields[0];
+    if (!field?.type) return domainFailure(path, `synthetic union ${name} is incomplete`, value);
+    return runtimeDomainFailure(field.type, value, context, field.tsType, path);
+  }
+  if (!value || typeof value !== "object" || !declaration.discriminant) {
+    return domainFailure(path, `runtime value is not a tagged ${name} record`, value);
+  }
+  const tag = (value as Record<string, unknown>)[declaration.discriminant];
+  const variant = declaration.variants?.find(candidate => candidate.name === tag);
+  if (!variant) return domainFailure(path, `${name} has an unknown runtime variant`, value);
+  for (const field of variant.fields) {
+    if (field.name === declaration.discriminant) continue;
+    if (!field.type) return domainFailure(`${path}.${field.name}`, "variant field has no resolved verified type", value);
+    const nested = field.type.kind === "user"
+      ? runtimeUserDomainFailure(
+          field.type.name,
+          (value as Record<string, unknown>)[field.name],
+          context,
+          `${path}.${field.name}`,
+          nestedSeen,
+        )
+      : runtimeDomainFailure(
+          field.type,
+          (value as Record<string, unknown>)[field.name],
+          context,
+          field.tsType,
+          `${path}.${field.name}`,
+        );
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function runtimeObjectKey(ty: Ty, key: unknown): unknown {
+  if (typeof key === "string" && (ty.kind === "int" || ty.kind === "nat") && /^-?\d+$/.test(key)) {
+    return ty.big ? BigInt(key) : Number(key);
+  }
+  return key;
+}
+
+function domainFailure(path: string, reason: string, runtimeValue: unknown): RuntimeDomainFailure {
+  return { path, reason, runtimeValue };
 }
 
 function failure(path: string, reason: string, formalValue: unknown): RuntimeEncodingFailure {
