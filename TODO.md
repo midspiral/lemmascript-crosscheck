@@ -149,6 +149,31 @@ The separate JavaScript contract evaluator in `src/runtime-spec.ts` already
 enumerates bounded runtime quantifiers. This item remains necessary for the
 exact formal precondition path; do not substitute JavaScript evaluation there.
 
+### Reuse the guard's range analysis
+
+[midspiral/lemmascript-guard](https://github.com/midspiral/lemmascript-guard),
+in `src/guard-command.ts`, already recognizes implication-guarded finite ranges
+and lowers bounded `forall`/`exists` expressions to JavaScript loops, including
+a falsifying witness for a top-level `forall`.
+Crosscheck's runtime evaluator currently implements the same range recovery
+independently over typed expressions. The implementations use different IRs
+(`RawExpr` in the guard and `TExpr` here), so directly importing the guard's
+private emitter is not a clean reuse boundary.
+
+- [ ] Compare the normalized range forms and focused tests supported by the
+  guard and `src/runtime-spec.ts`, including inclusive/exclusive bounds,
+  natural lower bounds, nesting, and work limits.
+- [ ] Extract a shared, backend-neutral finite-range description in LemmaScript,
+  or thin IR adapters around one shared range-analysis algorithm.
+- [ ] Keep execution semantics backend-specific: JavaScript values for runtime
+  contracts, and exact integers/rationals plus model-call delegation for
+  `src/spec.ts`.
+- [ ] Make both `lemmascript-guard` and Crosscheck consume the shared analysis so
+  supported quantifier forms cannot drift independently.
+- [ ] Preserve the guard's falsifying-witness diagnostics and Crosscheck's rule
+  that incomplete or over-limit enumeration yields `NOT CHECKED`, never a
+  sampled truth value.
+
 ### Observed blocked targets
 
 - Rallly `scorePoll` uses bounded `forall` preconditions over its input array.
