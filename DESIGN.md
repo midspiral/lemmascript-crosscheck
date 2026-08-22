@@ -139,6 +139,8 @@ Candidate discovery combines:
 
 Numeric edges include signed small values, 32-bit boundaries, JavaScript's safe-integer boundary, exact and non-dyadic rationals, and array combinations that can overflow an otherwise representable accumulator. Composite generators recursively cover arrays, tuples, optionals, sets, maps, records, string unions, aliases, and discriminated unions.
 
+After a clean canonical execution, Crosscheck also derives numeric projection probes from the concrete typed input shape. It substitutes `2^53` and `2^53 + 1` at number-backed numeric sites, both individually and in pairs, so it can expose values that are distinct in the exact model but become equal JavaScript numbers. This is type-directed and independent of function names or equality operators. The probe is bounded to the first eight numeric sites in a concrete shape.
+
 Zero-argument functions produce one candidate: the empty argument tuple.
 
 Each candidate is evaluated against the typed `requires` expressions before runtime encoding. The precondition interpreter uses exact integers and rationals. It can delegate calls to functions present in the compiled model, which supports predicates such as a verified sortedness helper. If an expression lies outside the implemented evaluator, the target is `NOT CHECKED`; Crosscheck does not guess whether the candidate is valid.
@@ -149,7 +151,9 @@ Candidates then fall into three classes:
 - precondition-valid but unrepresentable values, which can witness an input-domain issue; and
 - precondition-valid, faithfully representable values, which are executed.
 
-`--cases` limits successful representable executions per target, not the number of raw candidates considered.
+For a finite numeric bridge failure, Crosscheck can additionally execute an explicitly recorded lossy JavaScript projection while retaining the original exact arguments for the verified model. It promotes that probe only when the projected call returns a result unequal to the exact model result; otherwise the ordinary input-domain witness remains available.
+
+`--cases` limits successful representable main executions per target, not the number of raw candidates or auxiliary optional-presence and numeric-projection probes considered.
 
 ### 5. Execute model and runtime
 
@@ -183,6 +187,7 @@ Crosscheck also compares encoded arguments before and after the call and checks 
 | Category | Meaning |
 | --- | --- |
 | `input-domain` | The proof accepts an input that the TypeScript representation cannot encode faithfully. |
+| `input-representation-mismatch` | Rounding an exact input to its JavaScript `number` representation changes the returned result. |
 | `result-mismatch` | Runtime and verified model return unequal exact values. |
 | `input-mutation` | JavaScript changes a caller-visible argument absent from the value model. |
 | `optional-presence` | JavaScript distinguishes omission from a property explicitly set to `undefined`. |
@@ -192,13 +197,15 @@ Crosscheck also compares encoded arguments before and after the call and checks 
 
 Optional record inputs receive one additional kind of probe. After the canonical omitted-property representation succeeds, Crosscheck tries present-`undefined` variants and detects results that depend on JavaScript property presence.
 
-The current engine reports the first concrete issue found for each target. If no executable mismatch appears but a valid unrepresentable input was found, it reports that domain witness. This ordering favors observed wrong runtime behavior over a later domain-only explanation.
+Numeric projection probes retain both argument tuples: the exact formal values passed to the model and the rounded values passed to JavaScript. The report shows every changed numeric path. A projected result mismatch is remembered while the ordinary search continues, allowing a mismatch on faithfully represented inputs to take precedence; it is still stronger evidence than a domain-only witness.
+
+The current engine reports the first faithfully represented concrete issue found for each target. If none appears, an observed numeric-projection result mismatch precedes a valid unrepresentable domain witness. An incomplete comparison still yields `NOT CHECKED` rather than allowing an earlier auxiliary probe to hide it.
 
 ### 7. Shrink and persist failures
 
-Executable and input-domain witnesses currently pass through a deterministic, representation-directed shrinker. Integers move toward zero and semantic boundaries, while rationals, strings, arrays, and plain objects receive structural reductions. The shrinker does not yet consult LemmaScript types: executable reductions must reproduce the same category, but input-domain reductions need only remain unrepresentable. It can therefore construct an invalid finite-string, discriminant, or tuple witness; this known correctness gap is tracked as P0 in [TODO.md](TODO.md). Optional-presence findings retain their paired runtime representation without shrinking, and runtime-timeout findings retain the input that actually crossed the deadline instead of probing a worker that was just killed.
+Executable and input-domain witnesses currently pass through a deterministic, representation-directed shrinker. Integers move toward zero and semantic boundaries, while rationals, strings, arrays, and plain objects receive structural reductions. The shrinker does not yet consult LemmaScript types: executable reductions must reproduce the same category, but input-domain reductions need only remain unrepresentable. It can therefore construct an invalid finite-string, discriminant, or tuple witness; this known correctness gap is tracked as P0 in [TODO.md](TODO.md). Optional-presence and input-representation findings retain their paired formal/runtime representations without shrinking, and runtime-timeout findings retain the input that actually crossed the deadline instead of probing a worker that was just killed.
 
-Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the source and runtime entry hashes, formal and runtime targets, category, and encoded witness. Optional-presence issues include both model and runtime representations in the identity. Content identity namespaces different audited code while remaining stable when byte-identical files move.
+Any changed minimized witness is replayed before reporting; unshrunk findings retain the directly observed execution. The issue ID is the first ten hexadecimal characters of a SHA-256 digest over the source and runtime entry hashes, formal and runtime targets, category, and encoded witness. Optional-presence and input-representation issues include both model and runtime representations in the identity. Content identity namespaces different audited code while remaining stable when byte-identical files move.
 
 Saved `lemmascript-crosscheck.case/v2` cases record the source and runtime entry paths and hashes, target, runtime export, issue category, arguments, and any representation variant. Replay restores the recorded runtime when none is supplied, includes alternate runtimes in generated commands, and refuses to run if either content hash has changed. An explicitly supplied module at a new path is accepted when its hash matches. Runtime identity currently covers the imported entry file, not its transitive dependencies.
 
@@ -214,6 +221,8 @@ Formal integers are held as `bigint` regardless of their TypeScript representati
 - a `number`-backed formal integer crosses only when conversion to `number` and back preserves the exact integer.
 
 This admits `9007199254740992`, which is exactly representable, while rejecting `9007199254740993`.
+
+The word “floating-point” here describes JavaScript's storage format, not the spelling of the input. Every ordinary JavaScript `number` is IEEE-754 binary64, including integer-looking values. Binary64 has 53 bits of integer precision, so converting the exact integer `9007199254740993` produces the already-existing number `9007199254740992`. A numeric projection probe makes that lossy conversion explicit and records it rather than treating the call as faithful.
 
 Formal reals use normalized `Rational` values. Runtime binary64 numbers are decomposed into the exact rational represented by their IEEE-754 bits before comparison. Consequently, `3 / 2` can agree exactly while the runtime value for `1 / 10` differs from the mathematical rational.
 
@@ -316,7 +325,7 @@ The v0.1.0 implementation intentionally has a narrower contract than the long-te
 
 ## Tests and release checks
 
-Unit tests cover exact numeric representation, candidate generation, optional presence, rational arithmetic, typed preconditions, shrinking, worker recovery and protocol isolation, audit-loop failure classification, stable encoding, and report wording. The standard validation sequence is:
+Unit tests cover exact numeric representation and projection, candidate generation, optional presence, rational arithmetic, typed preconditions, shrinking, worker recovery and protocol isolation, audit-loop failure classification, stable encoding, and report wording. The standard validation sequence is:
 
 ```sh
 npm run typecheck
@@ -332,6 +341,7 @@ End-to-end regression fixtures live in the adjacent LemmaScript repository. The 
 | Fixture | Expected behavior |
 | --- | --- |
 | `arraySum.ts` | Finds a safe-input accumulator precision mismatch. |
+| `binarySearch.ts` | Finds distinct exact inputs that collapse to one JavaScript number and change the search result. |
 | `division.ts` | Distinguishes exact dyadic agreement from non-dyadic binary64 mismatch. |
 | `bigintBits.ts` | Samples exact BigInt behavior without finding a mismatch. |
 | `nestedPush.ts` | Finds caller-visible input mutation. |

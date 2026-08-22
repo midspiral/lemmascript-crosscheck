@@ -16,6 +16,8 @@ For a selected function, let:
 - `P(m)` mean that every typed LemmaScript `requires` clause evaluates to
   exactly `true`;
 - `B(m)` be the partial bridge from formal values to JavaScript values;
+- `Q(m)` be the explicitly recorded finite numeric projection used only by
+  input-rounding probes;
 - `M(m)` be the result of the compiled, verified Dafny model; and
 - `J(B(m))` be the observed JavaScript execution.
 
@@ -31,7 +33,11 @@ requires the runtime call to return synchronously, leave its arguments
 unchanged, and emit no captured console or standard output.
 
 If `P(m)` is true but `B(m)` cannot preserve the formal value exactly, `m` is
-an `input-domain` witness. JavaScript is not invoked for that witness.
+an `input-domain` witness. It is never passed to JavaScript as though the
+bridge were faithful. When the only loss is a finite `number` conversion,
+Crosscheck may additionally call `J(Q(m))`, retaining `m` for the model and
+recording every changed numeric path. An unequal normal return is an
+`input-representation-mismatch`; otherwise the ordinary domain witness remains.
 
 Crosscheck searches a finite, deterministic candidate sequence. Agreement is
 therefore sampled evidence, except for a zero-parameter function, whose input
@@ -349,6 +355,22 @@ If the bridge fails after a precondition-valid candidate, that candidate is
 `unrepresentable`. The first such candidate is remembered, but the search
 continues for an executable issue.
 
+`projectRuntime` uses the same recursive type and shape checks but permits a
+finite inexact conversion at a number-backed integer, natural, or real. It
+returns the projected JavaScript value together with `(path, formalValue,
+runtimeValue)` for every such conversion. It still rejects malformed formal
+values and non-finite projections. This operation is never used for a
+canonical comparison.
+
+`numericPrecisionVariants` derives additional formal inputs from a concrete
+typed argument shape. It considers at most the first eight number-backed
+numeric sites, traversing parameters and nested values deterministically. For
+each site it substitutes `2^53 + 1`; for each pair it tries both orientations
+of `2^53` and `2^53 + 1`. Both are exact formal values, but JavaScript converts
+the latter to the former. The walk covers arrays, tuples, present optionals,
+sets, maps, aliases, records, and the active discriminated-union branch. It
+does not inspect the function name, body, or equality operator.
+
 ## 7. One comparison
 
 The nested `evaluate` operation in `auditTarget` has five possible outcomes:
@@ -356,18 +378,20 @@ The nested `evaluate` operation in `auditTarget` has five possible outcomes:
 control flow is:
 
 ```text
-EVALUATE(formalArgs, runtimeOverride = none, presencePath = none):
+EVALUATE(formalArgs, variant = none):
   valid := evaluate all verified preconditions over formalArgs
   on unsupported/failed precondition: return not-checked
   if not valid: return invalid
 
   canonicalArgs := bridge(formalArgs)
-  if bridge failed: return unrepresentable(failure)
+  if bridge failed and variant is not numeric-projection:
+    return unrepresentable(failure)
 
-  actualRuntimeArgs := runtimeOverride if non-nullish, otherwise canonicalArgs
+  actualRuntimeArgs := variant.args when a variant exists, otherwise canonicalArgs
   call the runtime worker first
 
   if the runtime request exceeds --timeout:
+    if variant is numeric-projection: return clean
     call the model without a runtime result
     if the model returns: return issue(runtime-timeout)
     otherwise: return not-checked
@@ -377,18 +401,24 @@ EVALUATE(formalArgs, runtimeOverride = none, presencePath = none):
   if the runtime worker otherwise fails: return not-checked
 
   if the runtime threw:
+    if variant is numeric-projection: return clean
     call the model without a runtime result
     if the model returns: return issue(runtime-threw)
     otherwise: return not-checked
 
   call the model with formalArgs and the encoded runtime result
-  if model invocation or result marshalling fails: return not-checked
+  if model invocation or result marshalling fails:
+    if variant is numeric-projection: return clean
+    return not-checked
 
   if model.equal is not exactly true:
-    return issue(optional-presence when presencePath is nonempty,
+    return issue(input-representation-mismatch for numeric-projection,
+                 optional-presence for optional-presence,
                  otherwise result-mismatch)
 
-  if presencePath is nonempty and the runtime result contains a supported
+  if variant is numeric-projection: return clean
+
+  if variant is optional-presence and the runtime result contains a supported
      optional record field that is present with value undefined:
     return issue(optional-presence)
 
@@ -400,6 +430,12 @@ EVALUATE(formalArgs, runtimeOverride = none, presencePath = none):
 
   return clean
 ```
+
+Numeric projection is currently a result-only probe. A projected timeout,
+throw, mutation, or output does not become an
+`input-representation-mismatch`; the underlying exact input remains an
+`input-domain` witness. Worker setup and protocol failures retain their
+ordinary `not-checked` behavior when they reach the main or replay path.
 
 ### Worker observations
 
@@ -513,15 +549,16 @@ The target loop is equivalent to:
 cases := replay ? [decode(replay.args)] : CANDIDATES(fn, N, seed)
 checked := 0
 firstDomainWitness := none
+firstProjectedIssue := none
+precisionTried := empty set
 incomplete := none
 
 for formalArgs in cases:
   if not replay and checked >= N: break
 
-  outcome := EVALUATE(
-    formalArgs,
-    replay.runtimeArgs when replaying,
-    replay.presencePath when replaying)
+  replayVariant := the saved optional-presence or numeric-projection variant,
+                   when replaying one
+  outcome := EVALUATE(formalArgs, replayVariant)
 
   if outcome is invalid:
     continue
@@ -532,6 +569,12 @@ for formalArgs in cases:
 
   if outcome is unrepresentable:
     remember it only if firstDomainWitness is empty
+    projected := PROJECT_NUMERIC(formalArgs)
+    if projected records at least one loss:
+      projectedOutcome := EVALUATE(formalArgs, numeric-projection(projected))
+      if projectedOutcome is input-representation-mismatch and
+         firstProjectedIssue is empty:
+        firstProjectedIssue := projectedOutcome
     continue
 
   checked := checked + 1                 // clean or executable issue
@@ -539,10 +582,28 @@ for formalArgs in cases:
 
   if outcome is clean and not replay:
     for variant in OPTIONAL_PRESENCE_VARIANTS(formalArgs):
-      variantOutcome := EVALUATE(formalArgs, variant.args, variant.path)
+      variantOutcome := EVALUATE(formalArgs, optional-presence(variant))
       if variantOutcome is issue or not-checked:
         selectedOutcome := variantOutcome
         break
+
+    if selectedOutcome is clean and firstProjectedIssue is empty:
+      for precisionVariant in NUMERIC_PRECISION_VARIANTS(formalArgs):
+        skip a site/path key already in precisionTried
+        add its key to precisionTried
+        exactOutcome := EVALUATE(precisionVariant.formalArgs)
+        if exactOutcome is unrepresentable:
+          remember it only if firstDomainWitness is empty
+          projected := PROJECT_NUMERIC(precisionVariant.formalArgs)
+          projectedOutcome := EVALUATE(
+            precisionVariant.formalArgs,
+            numeric-projection(projected))
+          if projectedOutcome is input-representation-mismatch:
+            firstProjectedIssue := projectedOutcome
+            break
+        else if exactOutcome is issue:
+          selectedOutcome := exactOutcome
+          break
 
   if selectedOutcome is not-checked:
     incomplete := selectedOutcome
@@ -553,6 +614,8 @@ for formalArgs in cases:
 
 if incomplete exists:
   return NOT CHECKED
+if firstProjectedIssue exists:
+  save when enabled and return ISSUE FOUND
 if firstDomainWitness exists:
   minimize when permitted, save when enabled, and return ISSUE FOUND
 if checked == 0:
@@ -561,11 +624,16 @@ return NO ISSUE FOUND
 ```
 
 `--cases` therefore limits completed, representable main comparisons, not raw
-candidates, precondition attempts, unrepresentable values, or optional
-variants. A runtime call followed by an incomplete model comparison is not
-counted. The executable issue's own main candidate is counted. Calls made by
-optional probes, shrinking, and the final minimized-witness evaluation do not
-change the counter.
+candidates, precondition attempts, unrepresentable values, optional variants,
+or numeric projection probes. A runtime call followed by an incomplete model
+comparison is not counted. The executable issue's own main candidate is
+counted. Calls made by auxiliary probes, shrinking, and the final
+minimized-witness evaluation do not change the counter.
+
+Numeric precision keys contain the numeric path or path pair, so a particular
+site pattern is tried only once across the concrete base candidates. The first
+shape that exposes it supplies the untouched surrounding values. This bounds
+the auxiliary search and also makes it sampled rather than exhaustive.
 
 Because baseline, one-parameter, and pairwise candidates precede every random
 candidate, those deterministic families can consume the entire `N` budget;
@@ -576,10 +644,11 @@ There are two precedence levels:
 1. Within one execution: timeout, throw, result mismatch, optional-result
    presence, mutation, output, then clean agreement. A comparison-blocking
    failure produces `NOT CHECKED` at its point in that sequence.
-2. Across candidates: the first executable issue returns immediately; the
-   first `NOT CHECKED` stops the target and outranks any previously remembered
-   input-domain witness; an input-domain witness is reported only if the loop
-   ends without either of those outcomes.
+2. Across candidates: the first faithfully represented executable issue
+   returns immediately. The first `NOT CHECKED` stops the target and outranks
+   remembered projection and domain findings. If the main loop completes, the
+   first observed input-representation mismatch outranks the first
+   input-domain witness.
 
 If no issue is found, evidence is labeled `exhaustive` exactly when the
 function has zero parameters; every parameterized result is `sampled`.
@@ -614,15 +683,17 @@ repeat:
 | Ordinary object | Every recursive field-value shrink in `Object.entries` order, one field at a time. |
 | Number, `false`, empty string/array, `undefined`, `null`, `Set`, `Map`, or other value | No candidates. |
 
-Executable findings are shrunk only when their category is neither
-`optional-presence` nor `runtime-timeout`, and replay never shrinks. A proposed
-candidate is retained when a fresh canonical `EVALUATE(candidate)` returns an
-issue with the same category. If minimization changes the arguments, the final
-candidate is evaluated once more and that observation is used when available.
-These shrink evaluations do not carry a runtime override or presence path; in
-the corner case where a presence variant produced an ordinary mutation/output
-category, minimization therefore tests that category against canonical runtime
-arguments.
+Executable findings are shrunk only when their category is none of
+`optional-presence`, `input-representation-mismatch`, and `runtime-timeout`;
+replay never shrinks. Optional-presence and input-representation findings must
+retain a paired runtime argument tuple, while timeout probes cannot safely
+reuse the worker that was killed. For other categories, a proposed candidate
+is retained when a fresh canonical `EVALUATE(candidate)` returns an issue with
+the same category. If minimization changes the arguments, the final candidate
+is evaluated once more and that observation is used when available. These
+shrink evaluations do not carry a runtime variant; in the corner case where a
+presence variant produced an ordinary mutation/output category, minimization
+therefore tests that category against canonical runtime arguments.
 
 An input-domain witness is currently shrunk whenever this is not a replay. Its
 predicate requires only that a fresh evaluation be `unrepresentable`; it does
@@ -641,9 +712,9 @@ such a minimized input-domain witness is sound.
 The identity witness is `encode(formalArgs)` unless the issue observation
 actually retained alternate `runtimeArgs`, in which case it is
 `encode([formalArgs, runtimeArgs])`. Internally produced `optional-presence`
-result findings retain them; as noted in section 8, ordinary categories found
-during a presence probe currently do not. The issue ID is the first ten
-hexadecimal characters of:
+result findings and `input-representation-mismatch` findings retain them; as
+noted in section 8, ordinary categories found during a presence probe currently
+do not. The issue ID is the first ten hexadecimal characters of:
 
 ```text
 SHA-256(
@@ -674,11 +745,13 @@ matches it, recognized category/source/runtime/target fields, and syntactically
 valid SHA-256 strings. This is a shallow schema check: it does not recursively
 validate the tagged arguments or recompute the ID digest from the stored
 fields. Replay then selects the stored target and runtime export and uses
-exactly the decoded stored formal tuple. It performs no generation, no
-optional-variant enumeration, and no shrinking. An explicit source/runtime
-path may replace a recorded path only when its content hash is the same. If the
-recorded runtime was the recorded source, a source override also becomes the
-runtime unless `--runtime` is explicit.
+exactly the decoded stored formal tuple. For an input-representation case it
+also recomputes the numeric projection and requires the stored runtime tuple to
+match it. Replay performs no generation, no optional-variant enumeration, and
+no shrinking. An explicit source/runtime path may replace a recorded path only
+when its content hash is the same. If the recorded runtime was the recorded
+source, a source override also becomes the runtime unless `--runtime` is
+explicit.
 
 The stored category is validated as a known category, but the current replay
 path does not require the new observation to have that category. It reports
@@ -690,17 +763,19 @@ ends as `NOT CHECKED` because zero inputs satisfied the precondition.
 
 Each target returns exactly one of:
 
-- `ISSUE FOUND` / `counterexample` for the first executable issue or the
-  remembered input-domain witness;
+- `ISSUE FOUND` / `counterexample` for a faithfully represented executable
+  issue, an observed numeric-projection result mismatch, or the remembered
+  input-domain witness;
 - `NOT CHECKED` / `tool-failure` for unsupported semantics or an incomplete
   comparison; or
 - `NO ISSUE FOUND` / `sampled|exhaustive` after the candidate budget ends.
 
 The `cases` field is the `checked` counter from section 10. For an executable
-issue it includes the failing main candidate. For an input-domain issue it is
-the number of completed representable comparisons made before the witness was
-reported. Optional variants are never included.
-Shrink and final-witness evaluations are not included either.
+issue it includes the failing main candidate. For an input-representation or
+input-domain issue it is the number of completed representable main
+comparisons made before the remembered witness was reported. Optional and
+numeric variants are never included. Shrink and final-witness evaluations are
+not included either.
 
 Process exit status is `2` if any target is `NOT CHECKED`, otherwise `1` if any
 target has an issue, otherwise `0`. Thus `NOT CHECKED` takes precedence in a
@@ -715,6 +790,7 @@ and deterministic target behavior, the following are deterministic:
 - the seeded random stream;
 - stable deduplication;
 - optional-variant order;
+- numeric-site and projection-variant order;
 - issue classification precedence;
 - shrink proposal and acceptance order;
 - tagged encodings; and

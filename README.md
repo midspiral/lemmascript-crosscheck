@@ -14,7 +14,7 @@ Crosscheck generates proof-valid inputs, runs the verified model and the JavaScr
 
 It currently finds:
 
-- integer precision and formal-input representation gaps;
+- integer precision, formal-input representation gaps, and result-changing input rounding;
 - exact-real versus binary floating-point differences;
 - ordinary result mismatches;
 - caller-visible input mutation;
@@ -118,6 +118,37 @@ Evidence: replayed counterexample · Dafny 4.11.0 model
 
 Both array elements are representable JavaScript integers, but their sum is not. The verified model returns the exact mathematical integer while JavaScript rounds it.
 
+### Input rounding before the function starts
+
+The `binarySearch.ts` fixture exposes a different failure: the arithmetic in the function need not lose precision because an argument has already been rounded at the JavaScript boundary.
+
+```sh
+LEMMASCRIPT=../LemmaScript node dist/src/cli.js \
+  ../LemmaScript/examples/binarySearch.ts --only binarySearch --cases 40 --details
+```
+
+```text
+binarySearch — ISSUE FOUND
+JavaScript input rounding changes the result.
+
+Formal input
+  arr         [9007199254740992]
+  target      9007199254740993
+
+JavaScript representation
+  arr         [9007199254740992]
+  target      9007199254740992
+
+Precision loss
+  target      9007199254740993 → 9007199254740992
+
+Result
+  verified    -1
+  JavaScript  0
+```
+
+No fractional literal is involved. Every ordinary JavaScript `number` uses IEEE-754 binary64, including integer-looking values, and it has only 53 bits of integer precision. By the time `binarySearch` evaluates `arr[mid] === target`, the two distinct formal integers have become the same JavaScript number. Crosscheck finds this with a general type-directed numeric projection probe, not a binary-search or equality-operator special case.
+
 ### Exact `bigint` operations
 
 The same audit over [LemmaScript's `bigintBits.ts`](https://github.com/midspiral/LemmaScript/blob/main/examples/bigintBits.ts) finds no mismatch in 40 generated inputs per target:
@@ -138,6 +169,7 @@ Evidence: 40 sampled proof-valid inputs · seed 17 · not a proof
 
 Other useful fixtures in `../LemmaScript/examples` include:
 
+- `binarySearch.ts`, which exposes distinct exact integer inputs collapsing to the same JavaScript number;
 - `division.ts`, which contrasts exact rational results with JavaScript binary64 values;
 - `nestedPush.ts`, which exposes caller-visible array mutation absent from the model;
 - `spreadMerge.ts`, which exposes omitted versus present-`undefined` properties.

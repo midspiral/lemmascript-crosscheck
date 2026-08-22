@@ -19,12 +19,54 @@ export interface RuntimeEncodingFailure {
 
 export type RuntimeEncodingResult = RuntimeEncoding | RuntimeEncodingFailure;
 
+export interface RuntimeProjectionLoss {
+  path: string;
+  formalValue: unknown;
+  runtimeValue: number;
+}
+
+export interface RuntimeProjection {
+  ok: true;
+  value: unknown;
+  losses: RuntimeProjectionLoss[];
+}
+
+export type RuntimeProjectionResult = RuntimeProjection | RuntimeEncodingFailure;
+
 export function encodeRuntime(
   ty: Ty,
   modelValue: unknown,
   context: BridgeContext,
   tsType?: string,
   path = "value",
+): RuntimeEncodingResult {
+  return encodeRuntimeValue(ty, modelValue, context, tsType, path);
+}
+
+/**
+ * Deliberately project an exact formal value into its JavaScript representation.
+ * Unlike `encodeRuntime`, this records finite numeric rounding instead of hiding it.
+ * Invalid formal shapes and non-finite projections still fail.
+ */
+export function projectRuntime(
+  ty: Ty,
+  modelValue: unknown,
+  context: BridgeContext,
+  tsType?: string,
+  path = "value",
+): RuntimeProjectionResult {
+  const losses: RuntimeProjectionLoss[] = [];
+  const encoded = encodeRuntimeValue(ty, modelValue, context, tsType, path, losses);
+  return encoded.ok ? { ...encoded, losses } : encoded;
+}
+
+function encodeRuntimeValue(
+  ty: Ty,
+  modelValue: unknown,
+  context: BridgeContext,
+  tsType?: string,
+  path = "value",
+  losses?: RuntimeProjectionLoss[],
 ): RuntimeEncodingResult {
   switch (ty.kind) {
     case "bool":
@@ -38,6 +80,10 @@ export function encodeRuntime(
       if (ty.big) return { ok: true, value: modelValue };
       const runtime = Number(modelValue);
       if (!Number.isFinite(runtime) || !Number.isInteger(runtime) || BigInt(runtime) !== modelValue) {
+        if (losses && Number.isFinite(runtime) && Number.isInteger(runtime)) {
+          losses.push({ path, formalValue: modelValue, runtimeValue: runtime });
+          return { ok: true, value: runtime };
+        }
         return failure(path, "JavaScript number cannot represent this integer exactly", modelValue);
       }
       return { ok: true, value: runtime };
@@ -46,6 +92,10 @@ export function encodeRuntime(
       if (!(modelValue instanceof Rational)) return failure(path, "formal real is not an exact rational", modelValue);
       const runtime = Number(modelValue.numerator) / Number(modelValue.denominator);
       if (!Number.isFinite(runtime) || !Rational.fromDouble(runtime).equals(modelValue)) {
+        if (losses && Number.isFinite(runtime)) {
+          losses.push({ path, formalValue: modelValue, runtimeValue: runtime });
+          return { ok: true, value: runtime };
+        }
         return failure(path, "JavaScript number cannot represent this rational exactly", modelValue);
       }
       return { ok: true, value: runtime };
@@ -58,7 +108,7 @@ export function encodeRuntime(
       if (!Array.isArray(modelValue)) return failure(path, "formal sequence is not an array", modelValue);
       const output: unknown[] = [];
       for (let index = 0; index < modelValue.length; index++) {
-        const encoded = encodeRuntime(ty.elem, modelValue[index], context, undefined, `${path}[${index}]`);
+        const encoded = encodeRuntimeValue(ty.elem, modelValue[index], context, undefined, `${path}[${index}]`, losses);
         if (!encoded.ok) return encoded;
         output.push(encoded.value);
       }
@@ -72,7 +122,7 @@ export function encodeRuntime(
       for (let index = 0; index < ty.elems.length; index++) {
         const elemTy = ty.elems[index];
         if (!elemTy) return failure(path, "tuple type is incomplete", modelValue);
-        const encoded = encodeRuntime(elemTy, modelValue[index], context, undefined, `${path}[${index}]`);
+        const encoded = encodeRuntimeValue(elemTy, modelValue[index], context, undefined, `${path}[${index}]`, losses);
         if (!encoded.ok) return encoded;
         output.push(encoded.value);
       }
@@ -81,13 +131,13 @@ export function encodeRuntime(
     case "optional":
       return modelValue === undefined || modelValue === null
         ? { ok: true, value: undefined }
-        : encodeRuntime(ty.inner, modelValue, context, tsType, path);
+        : encodeRuntimeValue(ty.inner, modelValue, context, tsType, path, losses);
     case "set": {
       const values = modelValue instanceof Set ? [...modelValue] : Array.isArray(modelValue) ? modelValue : null;
       if (!values) return failure(path, "formal set has an invalid model value", modelValue);
       const output = new Set<unknown>();
       for (let index = 0; index < values.length; index++) {
-        const encoded = encodeRuntime(ty.elem, values[index], context, undefined, `${path}{${index}}`);
+        const encoded = encodeRuntimeValue(ty.elem, values[index], context, undefined, `${path}{${index}}`, losses);
         if (!encoded.ok) return encoded;
         output.add(encoded.value);
       }
@@ -104,9 +154,9 @@ export function encodeRuntime(
       for (let index = 0; index < entries.length; index++) {
         const entry = entries[index];
         if (!entry) continue;
-        const key = encodeRuntime(ty.key, entry[0], context, undefined, `${path}.key${index}`);
+        const key = encodeRuntimeValue(ty.key, entry[0], context, undefined, `${path}.key${index}`, losses);
         if (!key.ok) return key;
-        const value = encodeRuntime(ty.value, entry[1], context, undefined, `${path}.value${index}`);
+        const value = encodeRuntimeValue(ty.value, entry[1], context, undefined, `${path}.value${index}`, losses);
         if (!value.ok) return value;
         encodedEntries.push([key.value, value.value]);
       }
@@ -114,7 +164,7 @@ export function encodeRuntime(
       return { ok: true, value: Object.fromEntries(encodedEntries.map(([key, value]) => [String(key), value])) };
     }
     case "user":
-      return encodeUser(ty.name, modelValue, context, path);
+      return encodeUser(ty.name, modelValue, context, path, losses);
     case "void":
       return failure(path, "void cannot be used as an input", modelValue);
     case "fn":
@@ -124,7 +174,13 @@ export function encodeRuntime(
   }
 }
 
-function encodeUser(name: string, value: unknown, context: BridgeContext, path: string): RuntimeEncodingResult {
+function encodeUser(
+  name: string,
+  value: unknown,
+  context: BridgeContext,
+  path: string,
+  losses?: RuntimeProjectionLoss[],
+): RuntimeEncodingResult {
   const declaration = context.declarations.get(name);
   if (!declaration) return failure(path, `missing declaration for ${name}`, value);
   if (declaration.typeParams?.length) return failure(path, `generic user type ${name} is unsupported`, value);
@@ -135,7 +191,7 @@ function encodeUser(name: string, value: unknown, context: BridgeContext, path: 
         : failure(path, `value is not a member of ${name}`, value);
     case "alias":
       return declaration.aliasOfTy
-        ? encodeRuntime(declaration.aliasOfTy, value, context, declaration.aliasOf, path)
+        ? encodeRuntimeValue(declaration.aliasOfTy, value, context, declaration.aliasOf, path, losses)
         : failure(path, `alias ${name} has no resolved type`, value);
     case "record": {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -146,12 +202,13 @@ function encodeUser(name: string, value: unknown, context: BridgeContext, path: 
         if (!field.type) return failure(`${path}.${field.name}`, "field type is unresolved", value);
         const fieldValue = (value as Record<string, unknown>)[field.name];
         if (field.type.kind === "optional" && (fieldValue === undefined || fieldValue === null)) continue;
-        const encoded = encodeRuntime(
+        const encoded = encodeRuntimeValue(
           field.type,
           fieldValue,
           context,
           field.tsType,
           `${path}.${field.name}`,
+          losses,
         );
         if (!encoded.ok) return encoded;
         output[field.name] = encoded.value;
@@ -163,7 +220,7 @@ function encodeUser(name: string, value: unknown, context: BridgeContext, path: 
         const variant = declaration.variants?.find(candidate => candidate.name === (Array.isArray(value) ? "ArrayBranch" : "NonArrayBranch"));
         const field = variant?.fields[0];
         if (!field?.type) return failure(path, `synthetic union ${name} is incomplete`, value);
-        return encodeRuntime(field.type, value, context, field.tsType, path);
+        return encodeRuntimeValue(field.type, value, context, field.tsType, path, losses);
       }
       if (!value || typeof value !== "object" || !declaration.discriminant) {
         return failure(path, `${name} is not a tagged record`, value);
@@ -177,12 +234,13 @@ function encodeUser(name: string, value: unknown, context: BridgeContext, path: 
         if (!field.type) return failure(`${path}.${field.name}`, "field type is unresolved", value);
         const fieldValue = (value as Record<string, unknown>)[field.name];
         if (field.type.kind === "optional" && (fieldValue === undefined || fieldValue === null)) continue;
-        const encoded = encodeRuntime(
+        const encoded = encodeRuntimeValue(
           field.type,
           fieldValue,
           context,
           field.tsType,
           `${path}.${field.name}`,
+          losses,
         );
         if (!encoded.ok) return encoded;
         output[field.name] = encoded.value;
@@ -191,6 +249,231 @@ function encodeUser(name: string, value: unknown, context: BridgeContext, path: 
     }
     case "opaque":
       return failure(path, `opaque user type ${name} is unsupported`, value);
+  }
+}
+
+type NumberBackedTy = Extract<Ty, { kind: "int" | "nat" | "real" }>;
+
+interface ValueNumericSite {
+  path: string;
+  ty: NumberBackedTy;
+  replace(root: unknown, replacement: unknown): unknown;
+}
+
+interface ArgumentNumericSite extends ValueNumericSite {
+  param: number;
+}
+
+export interface NumericPrecisionVariant {
+  key: string;
+  args: unknown[];
+}
+
+// Binary64 represents 2^53 exactly, but rounds 2^53 + 1 back to 2^53.
+const COLLISION_EXACT = 9_007_199_254_740_992n;
+const COLLISION_ROUNDED = 9_007_199_254_740_993n;
+const MAX_PRECISION_SITES = 8;
+
+/**
+ * Type-directed formal inputs that expose IEEE-754 input rounding. Variants
+ * are derived from a concrete generated shape, not from function names or AST
+ * operators. Single-site variants catch value-sensitive code; paired variants
+ * catch distinct numeric inputs collapsing before equality/comparison.
+ */
+export function numericPrecisionVariants(
+  params: readonly { name: string; ty: Ty }[],
+  modelArgs: unknown[],
+  context: BridgeContext,
+): NumericPrecisionVariant[] {
+  const sites: ArgumentNumericSite[] = [];
+  for (let param = 0; param < params.length && sites.length < MAX_PRECISION_SITES; param++) {
+    const parameter = params[param];
+    if (!parameter) continue;
+    const nested = valueNumericSites(parameter.ty, modelArgs[param], context, parameter.name, new Set());
+    for (const site of nested) {
+      sites.push({ ...site, param });
+      if (sites.length >= MAX_PRECISION_SITES) break;
+    }
+  }
+
+  const variants: NumericPrecisionVariant[] = [];
+  for (const site of sites) {
+    variants.push({
+      key: `single:${site.path}`,
+      args: applyNumericSite(modelArgs, site, boundaryValue(site.ty, COLLISION_ROUNDED)),
+    });
+  }
+  for (let left = 0; left < sites.length; left++) {
+    for (let right = left + 1; right < sites.length; right++) {
+      const leftSite = sites[left];
+      const rightSite = sites[right];
+      if (!leftSite || !rightSite) continue;
+      variants.push({
+        key: `pair:${leftSite.path}:exact:${rightSite.path}:rounded`,
+        args: applyNumericSite(
+          applyNumericSite(modelArgs, leftSite, boundaryValue(leftSite.ty, COLLISION_EXACT)),
+          rightSite,
+          boundaryValue(rightSite.ty, COLLISION_ROUNDED),
+        ),
+      });
+      variants.push({
+        key: `pair:${leftSite.path}:rounded:${rightSite.path}:exact`,
+        args: applyNumericSite(
+          applyNumericSite(modelArgs, leftSite, boundaryValue(leftSite.ty, COLLISION_ROUNDED)),
+          rightSite,
+          boundaryValue(rightSite.ty, COLLISION_EXACT),
+        ),
+      });
+    }
+  }
+  return variants;
+}
+
+function applyNumericSite(args: unknown[], site: ArgumentNumericSite, replacement: unknown): unknown[] {
+  const output = [...args];
+  output[site.param] = site.replace(output[site.param], replacement);
+  return output;
+}
+
+function boundaryValue(ty: NumberBackedTy, value: bigint): unknown {
+  return ty.kind === "real" ? Rational.integer(value) : value;
+}
+
+function valueNumericSites(
+  ty: Ty,
+  value: unknown,
+  context: BridgeContext,
+  path: string,
+  seen: ReadonlySet<string>,
+): ValueNumericSite[] {
+  switch (ty.kind) {
+    case "int":
+    case "nat":
+      return ty.big ? [] : [{ path, ty, replace: (_root, replacement) => replacement }];
+    case "real":
+      return [{ path, ty, replace: (_root, replacement) => replacement }];
+    case "array": {
+      if (!Array.isArray(value)) return [];
+      return value.flatMap((entry, index) => valueNumericSites(ty.elem, entry, context, `${path}[${index}]`, seen)
+        .map(site => ({
+          ...site,
+          replace: (root: unknown, replacement: unknown) => {
+            if (!Array.isArray(root)) return root;
+            const output = [...root];
+            output[index] = site.replace(output[index], replacement);
+            return output;
+          },
+        })));
+    }
+    case "tuple": {
+      if (!Array.isArray(value)) return [];
+      return ty.elems.flatMap((elem, index) => valueNumericSites(elem, value[index], context, `${path}[${index}]`, seen)
+        .map(site => ({
+          ...site,
+          replace: (root: unknown, replacement: unknown) => {
+            if (!Array.isArray(root)) return root;
+            const output = [...root];
+            output[index] = site.replace(output[index], replacement);
+            return output;
+          },
+        })));
+    }
+    case "optional":
+      return value === undefined || value === null ? [] : valueNumericSites(ty.inner, value, context, path, seen);
+    case "set": {
+      const entries = value instanceof Set ? [...value] : Array.isArray(value) ? value : null;
+      if (!entries) return [];
+      return entries.flatMap((entry, index) => valueNumericSites(ty.elem, entry, context, `${path}{${index}}`, seen)
+        .map(site => ({
+          ...site,
+          replace: (root: unknown, replacement: unknown) => {
+            const values = root instanceof Set ? [...root] : Array.isArray(root) ? [...root] : null;
+            if (!values) return root;
+            values[index] = site.replace(values[index], replacement);
+            return root instanceof Set ? new Set(values) : values;
+          },
+        })));
+    }
+    case "map": {
+      if (value instanceof Map) {
+        const entries = [...value.entries()];
+        return entries.flatMap((entry, index) => [
+          ...valueNumericSites(ty.key, entry[0], context, `${path}.key${index}`, seen).map(site => ({
+            ...site,
+            replace: (root: unknown, replacement: unknown) => {
+              if (!(root instanceof Map)) return root;
+              const output = [...root.entries()];
+              const current = output[index];
+              if (!current) return root;
+              output[index] = [site.replace(current[0], replacement), current[1]];
+              return new Map(output);
+            },
+          })),
+          ...valueNumericSites(ty.value, entry[1], context, `${path}.value${index}`, seen).map(site => ({
+            ...site,
+            replace: (root: unknown, replacement: unknown) => {
+              if (!(root instanceof Map)) return root;
+              const output = [...root.entries()];
+              const current = output[index];
+              if (!current) return root;
+              output[index] = [current[0], site.replace(current[1], replacement)];
+              return new Map(output);
+            },
+          })),
+        ]);
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      return Object.entries(value).flatMap(([key, entry]) => valueNumericSites(ty.value, entry, context, `${path}.${key}`, seen)
+        .map(site => ({
+          ...site,
+          replace: (root: unknown, replacement: unknown) => root && typeof root === "object" && !Array.isArray(root)
+            ? { ...root, [key]: site.replace((root as Record<string, unknown>)[key], replacement) }
+            : root,
+        })));
+    }
+    case "user": {
+      if (seen.has(ty.name)) return [];
+      const declaration = context.declarations.get(ty.name);
+      if (!declaration) return [];
+      const nestedSeen = new Set(seen).add(ty.name);
+      if (declaration.kind === "alias") {
+        return declaration.aliasOfTy ? valueNumericSites(declaration.aliasOfTy, value, context, path, nestedSeen) : [];
+      }
+      if (declaration.kind === "record") {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+        return (declaration.fields ?? []).flatMap(field => field.type
+          ? valueNumericSites(field.type, (value as Record<string, unknown>)[field.name], context, `${path}.${field.name}`, nestedSeen)
+            .map(site => ({
+              ...site,
+              replace: (root: unknown, replacement: unknown) => root && typeof root === "object" && !Array.isArray(root)
+                ? { ...root, [field.name]: site.replace((root as Record<string, unknown>)[field.name], replacement) }
+                : root,
+            }))
+          : []);
+      }
+      if (declaration.kind === "discriminated-union") {
+        if (declaration.discriminant === "__isArray__") {
+          const variant = declaration.variants?.find(candidate => candidate.name === (Array.isArray(value) ? "ArrayBranch" : "NonArrayBranch"));
+          const field = variant?.fields[0];
+          return field?.type ? valueNumericSites(field.type, value, context, path, nestedSeen) : [];
+        }
+        if (!value || typeof value !== "object" || !declaration.discriminant) return [];
+        const tag = (value as Record<string, unknown>)[declaration.discriminant];
+        const variant = declaration.variants?.find(candidate => candidate.name === tag);
+        if (!variant) return [];
+        return variant.fields.flatMap(field => field.name !== declaration.discriminant && field.type
+          ? valueNumericSites(field.type, (value as Record<string, unknown>)[field.name], context, `${path}.${field.name}`, nestedSeen)
+            .map(site => ({
+              ...site,
+              replace: (root: unknown, replacement: unknown) => root && typeof root === "object" && !Array.isArray(root)
+                ? { ...root, [field.name]: site.replace((root as Record<string, unknown>)[field.name], replacement) }
+                : root,
+            }))
+          : []);
+      }
+      return [];
+    }
+    case "bool": case "string": case "void": case "fn": case "unknown": return [];
   }
 }
 

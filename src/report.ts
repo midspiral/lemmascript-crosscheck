@@ -43,12 +43,18 @@ function renderIssue(target: TargetReport, issue: Issue, report: AuditReport): s
     if (issue.formalPath && issue.formalDisplay) lines.push(`  ${issue.formalPath.padEnd(12)}${issue.formalDisplay}`);
     lines.push("", issue.diagnosis + ".", "This is a model/runtime domain mismatch, not an executed JavaScript call.");
   } else {
-    lines.push("Input");
+    lines.push(issue.category === "input-representation-mismatch" ? "Formal input" : "Input");
     appendArgs(lines, issue);
     if (issue.runtimeArgDisplays) {
       lines.push("", "JavaScript representation");
       for (let index = 0; index < issue.paramNames.length; index++) {
         lines.push(`  ${issue.paramNames[index]!.padEnd(12)}${issue.runtimeArgDisplays[index] ?? "<unknown>"}`);
+      }
+    }
+    if (issue.representationLosses?.length) {
+      lines.push("", "Precision loss");
+      for (const loss of issue.representationLosses) {
+        lines.push(`  ${loss.path.padEnd(12)}${formatLossValue(loss.formalValue)} → ${formatLossValue(loss.runtimeValue)}`);
       }
     }
     if (issue.category === "input-mutation") {
@@ -70,6 +76,11 @@ function renderIssue(target: TargetReport, issue: Issue, report: AuditReport): s
   const backend = report.provenance ? ` · Dafny ${report.provenance.dafny} model` : "";
   lines.push("", `Evidence: replayed counterexample${backend}`);
   return lines.join("\n");
+}
+
+function formatLossValue(value: Parameters<typeof decode>[0]): string {
+  const decoded = decode(value);
+  return typeof decoded === "bigint" ? decoded.toString() : formatValue(decoded);
 }
 
 function appendArgs(lines: string[], issue: Issue): void {

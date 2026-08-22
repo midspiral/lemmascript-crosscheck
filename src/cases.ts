@@ -95,6 +95,7 @@ function isIssueCategory(value: unknown): value is IssueCategory {
   return typeof value === "string" && [
     "result-mismatch",
     "input-domain",
+    "input-representation-mismatch",
     "input-mutation",
     "optional-presence",
     "console-output",

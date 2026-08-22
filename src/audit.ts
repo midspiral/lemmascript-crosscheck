@@ -1,6 +1,17 @@
 import path from "node:path";
 import { decode, encode, encodedEqual, type Encoded } from "./codec.js";
-import { encodeRuntime, optionalPresenceVariants, presentUndefinedPath, type BridgeContext, type RuntimeEncodingFailure, type RuntimeEncodingResult, typeSupportReason } from "./bridge.js";
+import {
+  encodeRuntime,
+  numericPrecisionVariants,
+  optionalPresenceVariants,
+  presentUndefinedPath,
+  projectRuntime,
+  type BridgeContext,
+  type RuntimeEncodingFailure,
+  type RuntimeEncodingResult,
+  type RuntimeProjectionLoss,
+  typeSupportReason,
+} from "./bridge.js";
 import { candidateCases } from "./generate.js";
 import type { Ty, TypedFunction, TypedInfo } from "./ir.js";
 import { WorkerTimeoutError } from "./json-line-client.js";
@@ -42,7 +53,12 @@ interface ExecutedIssue {
   runtimeError?: string;
   runtimeArgs?: unknown[];
   presencePath?: string;
+  representationLosses?: RuntimeProjectionLoss[];
 }
+
+type RuntimeVariant =
+  | { kind: "optional-presence"; args: unknown[]; path: string }
+  | { kind: "numeric-projection"; args: unknown[]; losses: RuntimeProjectionLoss[] };
 
 interface CaseOutcome {
   kind: "clean" | "invalid" | "unrepresentable" | "issue" | "not-checked";
@@ -136,9 +152,13 @@ export async function auditTarget(
     : candidateCases(fn, info, options.cases, options.seed);
   let checked = 0;
   let domainWitness: DomainWitness | undefined;
+  let projectedIssue: ExecutedIssue | undefined;
+  const precisionTried = new Set<string>();
   let incomplete: { reason: string; nextStep: string } | undefined;
 
-  const evaluate = async (args: unknown[], runtimeOverride?: unknown[], presencePath?: string): Promise<CaseOutcome> => {
+  const evaluate = async (args: unknown[], variant?: RuntimeVariant): Promise<CaseOutcome> => {
+    // Numeric projection establishes only an unequal normal return. Other
+    // projected behavior leaves the exact input as an ordinary domain witness.
     let valid: boolean;
     try {
       valid = await satisfiesPreconditions(fn, args, info.constants, async (name, callArgs) => {
@@ -175,17 +195,26 @@ export async function auditTarget(
     if (!valid) return { kind: "invalid" };
 
     const encoded = encodeArguments(fn, args, context);
-    if (!encoded.ok) return { kind: "unrepresentable", failure: encoded };
+    if (!encoded.ok && variant?.kind !== "numeric-projection") {
+      return { kind: "unrepresentable", failure: encoded };
+    }
+    const runtimeArgs = variant?.args ?? (encoded.ok ? encoded.value : undefined);
+    if (!Array.isArray(runtimeArgs)) return {
+      kind: "not-checked",
+      reason: "the runtime argument representation is not an argument tuple",
+      nextStep: "Fix the semantic bridge before rerunning this comparison.",
+    };
 
     let runtimeResponse: Record<string, unknown>;
     try {
       runtimeResponse = await workers.runtime.request({
         type: "call",
         target: runtimeTarget,
-        args: encode(runtimeOverride ?? encoded.value),
+        args: encode(runtimeArgs),
       }, options.timeoutMs);
     } catch (error) {
       if (error instanceof WorkerTimeoutError) {
+        if (variant?.kind === "numeric-projection") return { kind: "clean" };
         const model = await callModel(workers, fn, info, args, options.timeoutMs);
         return model.status === "ok"
           ? { kind: "issue", issue: { category: "runtime-timeout", args, modelResult: String(model.modelDisplay) } }
@@ -217,6 +246,7 @@ export async function auditTarget(
       };
     }
     if (runtimeResponse.status === "threw") {
+      if (variant?.kind === "numeric-projection") return { kind: "clean" };
       const model = await callModel(workers, fn, info, args, options.timeoutMs);
       return model.status === "ok"
         ? {
@@ -239,6 +269,7 @@ export async function auditTarget(
     }
 
     const model = await callModel(workers, fn, info, args, options.timeoutMs, runtimeResponse.result as Encoded);
+    if (model.status !== "ok" && variant?.kind === "numeric-projection") return { kind: "clean" };
     if (model.status !== "ok") return {
       kind: "not-checked",
       reason: `verified model failed: ${String(model.error ?? model.status)}`,
@@ -256,21 +287,27 @@ export async function auditTarget(
     if (model.equal !== true) return {
       kind: "issue",
       issue: {
-        category: presencePath ? "optional-presence" : "result-mismatch",
+        category: variant?.kind === "numeric-projection"
+          ? "input-representation-mismatch"
+          : variant?.kind === "optional-presence"
+            ? "optional-presence"
+            : "result-mismatch",
         ...common,
-        ...(runtimeOverride === undefined ? {} : { runtimeArgs: runtimeOverride }),
-        ...(presencePath === undefined ? {} : { presencePath }),
+        ...(variant === undefined ? {} : { runtimeArgs: variant.args }),
+        ...(variant?.kind === "optional-presence" ? { presencePath: variant.path } : {}),
+        ...(variant?.kind === "numeric-projection" ? { representationLosses: variant.losses } : {}),
       },
     };
-    if (presencePath) {
+    if (variant?.kind === "numeric-projection") return { kind: "clean" };
+    if (variant?.kind === "optional-presence") {
       const resultPresence = presentUndefinedPath(fn.returnTy, decode(runtimeResponse.result as Encoded), context);
       if (resultPresence) return {
         kind: "issue",
         issue: {
           category: "optional-presence",
           ...common,
-          runtimeArgs: runtimeOverride!,
-          presencePath,
+          runtimeArgs: variant.args,
+          presencePath: variant.path,
         },
       };
     }
@@ -279,10 +316,37 @@ export async function auditTarget(
     return { kind: "clean" };
   };
 
+  const probeNumericProjection = async (args: unknown[]): Promise<CaseOutcome | null> => {
+    const projection = projectArguments(fn, args, context);
+    if (!projection.ok || projection.losses.length === 0) return null;
+    return await evaluate(args, {
+      kind: "numeric-projection",
+      args: projection.value,
+      losses: projection.losses,
+    });
+  };
+
   for (const args of allCases) {
     if (!options.replay && checked >= options.cases) break;
     const replayRuntimeArgs = options.replay?.runtimeArgs ? decode(options.replay.runtimeArgs) as unknown[] : undefined;
-    const outcome = await evaluate(args, replayRuntimeArgs, options.replay?.presencePath);
+    let replayVariant: RuntimeVariant | undefined;
+    if (replayRuntimeArgs && options.replay?.category === "input-representation-mismatch") {
+      const projection = projectArguments(fn, args, context);
+      if (!projection.ok || projection.losses.length === 0 || !stableArgsEqual(projection.value, replayRuntimeArgs)) {
+        return notChecked(
+          fn.name,
+          runtimeTarget,
+          options,
+          "the replayed JavaScript arguments are not the current numeric projection of the formal witness",
+          "Regenerate the case with the current semantic bridge.",
+          checked,
+        );
+      }
+      replayVariant = { kind: "numeric-projection", args: replayRuntimeArgs, losses: projection.losses };
+    } else if (replayRuntimeArgs && options.replay?.presencePath) {
+      replayVariant = { kind: "optional-presence", args: replayRuntimeArgs, path: options.replay.presencePath };
+    }
+    const outcome = await evaluate(args, replayVariant);
     if (outcome.kind === "invalid") continue;
     if (outcome.kind === "not-checked") {
       incomplete = {
@@ -293,6 +357,12 @@ export async function auditTarget(
     }
     if (outcome.kind === "unrepresentable") {
       domainWitness ??= { args, failure: outcome.failure! };
+      if (!projectedIssue) {
+        const projected = await probeNumericProjection(args);
+        if (projected?.kind === "issue" && projected.issue?.category === "input-representation-mismatch") {
+          projectedIssue = projected.issue;
+        }
+      }
       continue;
     }
     checked++;
@@ -301,9 +371,27 @@ export async function auditTarget(
       const canonical = encodeArguments(fn, args, context);
       if (canonical.ok) {
         for (const variant of optionalPresenceVariants(fn.params.map(param => param.ty), args, canonical.value as unknown[], context)) {
-          const variantOutcome = await evaluate(args, variant.args, variant.path);
+          const variantOutcome = await evaluate(args, { kind: "optional-presence", args: variant.args, path: variant.path });
           if (variantOutcome.kind === "issue" || variantOutcome.kind === "not-checked") {
             selectedOutcome = variantOutcome;
+            break;
+          }
+        }
+      }
+      if (selectedOutcome.kind === "clean" && !projectedIssue) {
+        for (const variant of numericPrecisionVariants(fn.params, args, context)) {
+          if (precisionTried.has(variant.key)) continue;
+          precisionTried.add(variant.key);
+          const exactOutcome = await evaluate(variant.args);
+          if (exactOutcome.kind === "unrepresentable") {
+            domainWitness ??= { args: variant.args, failure: exactOutcome.failure! };
+            const projected = await probeNumericProjection(variant.args);
+            if (projected?.kind === "issue" && projected.issue?.category === "input-representation-mismatch") {
+              projectedIssue = projected.issue;
+              break;
+            }
+          } else if (exactOutcome.kind === "issue") {
+            selectedOutcome = exactOutcome;
             break;
           }
         }
@@ -318,7 +406,9 @@ export async function auditTarget(
     }
     if (selectedOutcome.kind === "issue") {
       const original = selectedOutcome.issue!;
-      const canShrink = original.category !== "optional-presence" && original.category !== "runtime-timeout";
+      const canShrink = original.category !== "optional-presence"
+        && original.category !== "runtime-timeout"
+        && original.category !== "input-representation-mismatch";
       const minimized = options.replay || !canShrink ? original.args : await shrinkArgs(original.args, async candidate => {
         const result = await evaluate(candidate);
         return result.kind === "issue" && result.issue?.category === original.category;
@@ -337,6 +427,9 @@ export async function auditTarget(
       incomplete.nextStep,
       checked,
     );
+  }
+  if (projectedIssue) {
+    return await issueReport(fn, runtimeTarget, identity, checked, options, projectedIssue);
   }
   if (domainWitness) {
     let witness = domainWitness;
@@ -385,6 +478,23 @@ function encodeArguments(fn: TypedFunction, args: unknown[], context: BridgeCont
     output.push(encoded.value);
   }
   return { ok: true, value: output };
+}
+
+type ArgumentProjection =
+  | { ok: true; value: unknown[]; losses: RuntimeProjectionLoss[] }
+  | RuntimeEncodingFailure;
+
+function projectArguments(fn: TypedFunction, args: unknown[], context: BridgeContext): ArgumentProjection {
+  const output: unknown[] = [];
+  const losses: RuntimeProjectionLoss[] = [];
+  for (let index = 0; index < fn.params.length; index++) {
+    const param = fn.params[index]!;
+    const projected = projectRuntime(param.ty, args[index], context, param.tsType, param.name);
+    if (!projected.ok) return projected;
+    output.push(projected.value);
+    losses.push(...projected.losses);
+  }
+  return { ok: true, value: output, losses };
 }
 
 async function callModel(
@@ -440,6 +550,13 @@ async function issueReport(
     argDisplays: fn.params.map((param, index) => formatModelInput(param.ty, observed.args[index])),
     ...(observed.runtimeArgs === undefined ? {} : {
       runtimeArgDisplays: fn.params.map((_, index) => formatRuntimeInput(observed.runtimeArgs![index])),
+    }),
+    ...(observed.representationLosses === undefined ? {} : {
+      representationLosses: observed.representationLosses.map(loss => ({
+        path: loss.path,
+        formalValue: encode(loss.formalValue),
+        runtimeValue: encode(loss.runtimeValue),
+      })),
     }),
     ...(observed.modelResult === undefined ? {} : { modelResult: observed.modelResult }),
     ...(observed.runtimeResult === undefined ? {} : { runtimeResult: observed.runtimeResult }),
@@ -500,6 +617,11 @@ async function domainIssueReport(
 }
 
 function issueLanguage(category: Exclude<IssueCategory, "input-domain">, returnTy: Ty): { summary: string; diagnosis: string; resolution: string } {
+  if (category === "input-representation-mismatch") return {
+    summary: "JavaScript input rounding changes the result",
+    diagnosis: "JavaScript's IEEE-754 number representation rounds an exact formal numeric input before the function executes; distinct formal values can therefore collapse to the same runtime value.",
+    resolution: "Use an exact runtime representation, or restrict and enforce inputs to values that remain exact as JavaScript numbers.",
+  };
   if (category === "result-mismatch" && (returnTy.kind === "int" || returnTy.kind === "nat") && !returnTy.big) {
     return {
       summary: "result differs because JavaScript integer arithmetic lost precision",

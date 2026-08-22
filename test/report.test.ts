@@ -43,6 +43,38 @@ test("a numeric counterexample leads with exact expected and actual values", () 
   assert.match(text, /Evidence: replayed counterexample · Dafny 4\.11\.0 model/);
 });
 
+test("an input representation mismatch shows formal and rounded JavaScript arguments", () => {
+  const report: AuditReport = {
+    schema: "lemmascript-crosscheck.report/v1",
+    targets: [{
+      target: "binarySearch", runtimeTarget: "binarySearch", conclusion: "issue", evidence: "counterexample",
+      cases: 10, seed: 17,
+      issue: {
+        id: "1234567890", category: "input-representation-mismatch",
+        summary: "JavaScript input rounding changes the result",
+        diagnosis: "Distinct model inputs collapsed.", resolution: "Use bigint.",
+        args: encode([[9_007_199_254_740_992n], 9_007_199_254_740_993n]),
+        paramNames: ["arr", "target"],
+        argDisplays: ["[9007199254740992]", "9007199254740993"],
+        runtimeArgDisplays: ["[9007199254740992]", "9007199254740992"],
+        representationLosses: [{
+          path: "target",
+          formalValue: encode(9_007_199_254_740_993n),
+          runtimeValue: encode(9_007_199_254_740_992),
+        }],
+        modelResult: "-1", runtimeResult: encode(0), runtimeExact: "0",
+      },
+    }],
+  };
+
+  const text = renderReport(report, { details: false });
+  assert.match(text, /Formal input/);
+  assert.match(text, /JavaScript representation/);
+  assert.match(text, /target\s+9007199254740993 → 9007199254740992/);
+  assert.match(text, /verified\s+-1/);
+  assert.match(text, /JavaScript\s+0/);
+});
+
 test("an alternate runtime is included in the replay command", () => {
   const report: AuditReport = {
     schema: "lemmascript-crosscheck.report/v1",

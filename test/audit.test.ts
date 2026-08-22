@@ -22,6 +22,15 @@ const arrayFn: TypedFunction = {
   bodyKinds: ["return"],
 };
 
+const searchFn: TypedFunction = {
+  ...arrayFn,
+  name: "search",
+  params: [
+    { name: "arr", ty: { kind: "array", elem: { kind: "int" } }, tsType: "number[]" },
+    { name: "target", ty: { kind: "int" }, tsType: "number" },
+  ],
+};
+
 const info: TypedInfo = {
   schema: 1,
   lemmascript: "0.6.0",
@@ -113,4 +122,58 @@ test("a missing runtime export is reported as a mapping failure", async () => {
   assert.equal(report.reason, "runtime module does not export function missing");
   assert.doesNotMatch(report.reason!, /precondition/i);
   assert.match(report.nextStep!, /--entry f=<export>/);
+});
+
+test("number input collisions expose an actual projected result mismatch", async () => {
+  const searchInfo: TypedInfo = { ...info, functions: [searchFn] };
+  const model = client(async message => {
+    const args = decode(message.args as Encoded) as [bigint[], bigint];
+    const result = args[0][0] === args[1] ? 0n : -1n;
+    const runtimeResult = "runtimeResult" in message
+      ? decode(message.runtimeResult as Encoded)
+      : undefined;
+    return {
+      status: "ok",
+      modelDisplay: result.toString(),
+      modelValue: encode(result),
+      ...(runtimeResult === undefined ? {} : {
+        equal: typeof runtimeResult === "number" && BigInt(runtimeResult) === result,
+        runtimeExact: String(runtimeResult),
+      }),
+    };
+  });
+  const runtime = client(async message => {
+    const args = decode(message.args as Encoded) as [number[], number];
+    const result = args[0][0] === args[1] ? 0 : -1;
+    return { status: "ok", result: encode(result), before: message.args, after: message.args, console: [] };
+  });
+  const workers: AuditWorkers = { model, runtime, close() {} };
+
+  const report = await auditTarget(searchFn, searchInfo, identity, workers, { ...options, cases: 10 });
+
+  assert.equal(report.issue?.category, "input-representation-mismatch");
+  assert.deepEqual(decode(report.issue!.args), [[9_007_199_254_740_992n], 9_007_199_254_740_993n]);
+  assert.deepEqual(report.issue?.runtimeArgDisplays, ["[9007199254740992]", "9007199254740992"]);
+  assert.equal(report.issue?.modelResult, "-1");
+  assert.equal(decode(report.issue!.runtimeResult!), 0);
+  assert.deepEqual(report.issue?.representationLosses?.map(loss => loss.path), ["target"]);
+
+  const replay = await auditTarget(searchFn, searchInfo, identity, workers, {
+    ...options,
+    replay: {
+      schema: "lemmascript-crosscheck.case/v2",
+      id: report.issue!.id,
+      source: identity.source,
+      sourceSha256: identity.sourceSha256,
+      runtime: identity.runtime,
+      runtimeSha256: identity.runtimeSha256,
+      target: searchFn.name,
+      runtimeTarget: searchFn.name,
+      category: "input-representation-mismatch",
+      args: report.issue!.args,
+      runtimeArgs: encode([[9_007_199_254_740_992], 9_007_199_254_740_992]),
+    },
+  });
+  assert.equal(replay.issue?.category, "input-representation-mismatch");
+  assert.equal(replay.issue?.id, report.issue?.id);
 });

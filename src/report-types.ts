@@ -6,6 +6,7 @@ export type EvidenceKind = "counterexample" | "sampled" | "exhaustive" | "tool-f
 export type IssueCategory =
   | "result-mismatch"
   | "input-domain"
+  | "input-representation-mismatch"
   | "input-mutation"
   | "optional-presence"
   | "console-output"
@@ -22,6 +23,11 @@ export interface Issue {
   paramNames: string[];
   argDisplays: string[];
   runtimeArgDisplays?: string[];
+  representationLosses?: {
+    path: string;
+    formalValue: Encoded;
+    runtimeValue: Encoded;
+  }[];
   modelResult?: string;
   runtimeResult?: Encoded;
   runtimeExact?: string;

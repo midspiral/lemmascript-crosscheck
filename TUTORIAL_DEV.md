@@ -143,6 +143,8 @@ For every proof-valid candidate, [`src/bridge.ts`](src/bridge.ts) returns either
 
 The second result is a possible `input-domain` witness. Crosscheck remembers it while continuing to look for an executed runtime mismatch, which has higher reporting priority.
 
+There is one deliberate exception to “do not coerce early”: a numeric projection probe starts with an exact, already validated formal input, converts only finite number-backed numeric sites with JavaScript's real `Number(...)` semantics, and records every changed path. The verified model still receives the exact tuple. Crosscheck reports `input-representation-mismatch` only when the projected JavaScript call returns a different result. Type-directed single-site and paired `2^53`/`2^53 + 1` variants make this a general representation check; it does not scan for `==`, `===`, or a particular algorithm.
+
 ### 4. Two workers, one protocol
 
 [`src/workers.ts`](src/workers.ts) starts separate model and runtime child processes. [`src/json-line-client.ts`](src/json-line-client.ts) assigns request IDs, enforces deadlines, and recreates a worker after process-level failure or timeout.
@@ -184,13 +186,15 @@ For an executed call, current issue precedence is approximately:
 
 Runtime/model failures that prevent comparison become `NOT CHECKED`. A remembered formal-only `input-domain` witness is reported only when no executed issue or incomplete comparison took precedence.
 
+An observed numeric-projection result mismatch is remembered rather than returned immediately. This lets a later issue on faithfully represented inputs take precedence. If the main search finishes, the projection mismatch outranks the weaker domain-only witness.
+
 This ordering is product behavior. Adding a check above result comparison can hide an ordinary wrong result; adding it below output can make it practically unreachable. Choose and test the position deliberately.
 
 ### 6. Shrinking, IDs, and replay
 
 [`src/shrink.ts`](src/shrink.ts) proposes deterministic reductions and asks the audit relation whether each candidate still produces the same category. It does not know issue semantics itself.
 
-Most executable findings use the generic shrink loop. `optional-presence` retains a paired model/runtime representation, and `runtime-timeout` is intentionally not shrunk because the timed-out worker was killed and timing is stateful. A new category must explicitly decide whether the generic relation is safe.
+Most executable findings use the generic shrink loop. `optional-presence` and `input-representation-mismatch` retain paired model/runtime representations, and `runtime-timeout` is intentionally not shrunk because the timed-out worker was killed and timing is stateful. A new category must explicitly decide whether the generic relation is safe.
 
 [`src/cases.ts`](src/cases.ts) derives the ten-character ID from the source and runtime entry hashes, target and runtime export, category, and encoded witness. Saved cases include both paths and hashes plus the arguments and representation variant when needed. Replay restores the recorded runtime automatically, prints alternate runtimes explicitly, and rejects changed source or runtime contents. A byte-identical module may be replayed from a new path.
 

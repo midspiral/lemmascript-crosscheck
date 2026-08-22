@@ -69,6 +69,25 @@ test("v2 replay cases persist runtime identity and reject v1 cases", async t => 
   await saveCase(stored);
   assert.deepEqual(await loadCase(id), stored);
 
+  const projectedFormal = [[9_007_199_254_740_992n], 9_007_199_254_740_993n];
+  const projectedRuntime = [[9_007_199_254_740_992], 9_007_199_254_740_992];
+  const projectedArgs = encode(projectedFormal);
+  const projectedRuntimeArgs = encode(projectedRuntime);
+  const projectedId = issueId({
+    ...baseIdentity,
+    category: "input-representation-mismatch",
+    args: encode([projectedFormal, projectedRuntime]),
+  });
+  const projected: StoredCase = {
+    ...stored,
+    id: projectedId,
+    category: "input-representation-mismatch",
+    args: projectedArgs,
+    runtimeArgs: projectedRuntimeArgs,
+  };
+  await saveCase(projected);
+  assert.deepEqual(await loadCase(projectedId), projected);
+
   const oldId = "0123456789";
   await mkdir(root, { recursive: true });
   await writeFile(path.join(root, `${oldId}.json`), JSON.stringify({ ...stored, schema: "lemmascript-crosscheck.case/v1", id: oldId }));
