@@ -1,5 +1,10 @@
 import { compareCodePoints } from "./codec.js";
 import type { TExpr, Ty, TypeDeclInfo, TypedConst, TypedFunction } from "./ir.js";
+import {
+  planBoundedIntegerQuantifier,
+  QUANTIFIER_LIMIT,
+  type BoundedIntegerQuantifier,
+} from "./quantifier.js";
 import { Rational, asRational } from "./rational.js";
 
 export class SpecUnsupported extends Error {
@@ -122,11 +127,50 @@ export async function evaluateSpec(expr: TExpr, context: SpecContext): Promise<u
       }
       return value;
     }
-    case "forall": case "exists":
-      throw new SpecUnsupported(`${expr.kind} quantifier`);
+    case "forall": case "exists": return await evaluateExactQuantifier(expr, context);
     case "havoc": throw new SpecUnsupported("havoc expression");
     default: throw new SpecUnsupported(`expression ${expr.kind}`);
   }
+}
+
+async function evaluateExactQuantifier(expr: TExpr, context: SpecContext): Promise<boolean> {
+  const planned = planBoundedIntegerQuantifier(expr);
+  if (!planned.ok) throw new SpecUnsupported(planned.reason);
+  const plan = planned.value;
+  const bounds = await finiteExactIntegerBounds(plan, context);
+  if (!bounds) throw new SpecUnsupported(`${plan.kind} quantifier has no finite integer bounds`);
+  const count = bounds.max < bounds.min ? 0n : bounds.max - bounds.min + 1n;
+  if (count > BigInt(QUANTIFIER_LIMIT)) {
+    throw new SpecUnsupported(`${plan.kind} quantifier exceeds the ${QUANTIFIER_LIMIT}-value work limit`);
+  }
+  for (let value = bounds.min; value <= bounds.max; value += 1n) {
+    const truth = await evaluateSpec(plan.body, withBinding(context, plan.variable, value)) === true;
+    if (plan.kind === "forall" && !truth) return false;
+    if (plan.kind === "exists" && truth) return true;
+  }
+  return plan.kind === "forall";
+}
+
+async function finiteExactIntegerBounds(
+  plan: BoundedIntegerQuantifier,
+  context: SpecContext,
+): Promise<{ min: bigint; max: bigint } | null> {
+  let min: bigint | null = plan.natural ? 0n : null;
+  let max: bigint | null = null;
+  for (const lower of plan.lowerBounds) {
+    const bound = await evaluateSpec(lower.expression, context);
+    if (typeof bound !== "bigint") continue;
+    const candidate = lower.inclusive ? bound : bound + 1n;
+    min = min === null || candidate > min ? candidate : min;
+  }
+  for (const upper of plan.upperBounds) {
+    const bound = await evaluateSpec(upper.expression, context);
+    if (typeof bound !== "bigint") continue;
+    const candidate = upper.inclusive ? bound : bound - 1n;
+    max = max === null || candidate < max ? candidate : max;
+  }
+  if (min === null || max === null) return null;
+  return max < min ? { min: 0n, max: -1n } : { min, max };
 }
 
 async function evaluateBinary(expr: TExpr, context: SpecContext): Promise<unknown> {

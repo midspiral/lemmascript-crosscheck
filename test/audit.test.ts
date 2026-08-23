@@ -31,6 +31,46 @@ const searchFn: TypedFunction = {
   ],
 };
 
+const nonnegativeArrayFn: TypedFunction = {
+  ...arrayFn,
+  name: "nonnegative",
+  requires: [{
+    kind: "forall",
+    var: "k",
+    varTy: { kind: "nat" },
+    body: {
+      kind: "binop",
+      op: "==>",
+      left: {
+        kind: "binop",
+        op: "<",
+        left: { kind: "var", name: "k", ty: { kind: "nat" } },
+        right: {
+          kind: "field",
+          obj: { kind: "var", name: "values", ty: { kind: "array", elem: { kind: "int" } } },
+          field: "length",
+          ty: { kind: "nat" },
+        },
+        ty: { kind: "bool" },
+      },
+      right: {
+        kind: "binop",
+        op: ">=",
+        left: {
+          kind: "index",
+          obj: { kind: "var", name: "values", ty: { kind: "array", elem: { kind: "int" } } },
+          idx: { kind: "var", name: "k", ty: { kind: "nat" } },
+          ty: { kind: "int" },
+        },
+        right: { kind: "num", value: 0, ty: { kind: "int" } },
+        ty: { kind: "bool" },
+      },
+      ty: { kind: "bool" },
+    },
+    ty: { kind: "bool" },
+  }],
+};
+
 const info: TypedInfo = {
   schema: 1,
   lemmascript: "0.6.0",
@@ -72,6 +112,27 @@ function modelClient(): JsonLineRequestClient {
     ...(message.runtimeResult === undefined ? {} : { equal: true, runtimeExact: "0" }),
   }));
 }
+
+test("differential audits cross bounded forall preconditions and reach representability checks", async () => {
+  const runtime = client(async message => ({
+    status: "ok",
+    result: encode(0),
+    before: message.args,
+    after: message.args,
+    console: [],
+  }));
+  const workers: AuditWorkers = { model: modelClient(), runtime, close() {} };
+  const quantifiedInfo: TypedInfo = { ...info, functions: [nonnegativeArrayFn] };
+
+  const report = await auditTarget(nonnegativeArrayFn, quantifiedInfo, identity, workers, {
+    ...options,
+    cases: 5,
+  });
+
+  assert.equal(report.conclusion, "issue", JSON.stringify(report, null, 2));
+  assert.equal(report.issue?.category, "input-domain");
+  assert.equal(report.cases, 5);
+});
 
 test("runtime timeout witnesses are not shrunk against a poisoned worker", async () => {
   let poisoned = false;

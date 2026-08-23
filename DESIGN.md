@@ -172,7 +172,7 @@ After a clean canonical execution, Crosscheck also derives numeric projection pr
 
 Zero-argument functions produce one candidate: the empty argument tuple.
 
-Each candidate is evaluated against the typed `requires` expressions before runtime encoding. The precondition interpreter uses exact integers and rationals. It can delegate calls to functions present in the compiled model, which supports predicates such as a verified sortedness helper. If an expression lies outside the implemented evaluator, the target is `NOT CHECKED`; Crosscheck does not guess whether the candidate is valid.
+Each candidate is evaluated against the typed `requires` expressions before runtime encoding. The precondition interpreter uses exact integers and rationals. It can delegate calls to functions present in the compiled model, which supports predicates such as a verified sortedness helper. Bounded integer and natural quantifiers are enumerated completely with exact integer witnesses. If an expression lies outside the implemented evaluator, the target is `NOT CHECKED`; Crosscheck does not guess whether the candidate is valid.
 
 Candidates then fall into three classes:
 
@@ -195,8 +195,10 @@ full number edges; composite values receive them recursively.
 Each candidate is first evaluated against `requires` with JavaScript semantics.
 Calls in a contract delegate to the corresponding runtime export. For every
 accepted candidate, Crosscheck executes the target and evaluates each `ensures`
-clause against its returned value and post-call arguments. Bounded integer and
-natural quantifiers are enumerated completely, with a fixed work limit;
+clause against its returned value and post-call arguments. The exact and
+runtime evaluators share the structural range planner, but runtime witnesses
+and bound expressions retain JavaScript semantics. Bounded integer and natural
+quantifiers are enumerated completely, with a 10,000-value work limit;
 unbounded or truncated quantification is never treated as true.
 
 Independently, the argument tuple is checked against the resolved verified

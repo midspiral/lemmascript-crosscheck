@@ -1,6 +1,9 @@
-import type { TExpr, Ty, TypeDeclInfo, TypedConst, TypedFunction } from "./ir.js";
-
-const QUANTIFIER_LIMIT = 10_000;
+import type { TExpr, TypeDeclInfo, TypedConst, TypedFunction } from "./ir.js";
+import {
+  planBoundedIntegerQuantifier,
+  QUANTIFIER_LIMIT,
+  type BoundedIntegerQuantifier,
+} from "./quantifier.js";
 
 export class RuntimeSpecUnsupported extends Error {
   constructor(readonly reason: string) {
@@ -224,68 +227,41 @@ async function evaluateRuntimeTagMatch(expr: TExpr, context: RuntimeSpecContext)
 }
 
 async function evaluateRuntimeQuantifier(expr: TExpr, context: RuntimeSpecContext): Promise<boolean> {
-  const variable = String(expr.var);
-  const body = expr.body as TExpr;
-  const boundsExpr = quantifierBoundsExpression(expr.kind, body);
-  if (!boundsExpr) throw new RuntimeSpecUnsupported("forall quantifier is not guarded by a finite-range implication");
-  const bounds = await finiteIntegerBounds(variable, expr.varTy as Ty | undefined, boundsExpr, context);
-  if (!bounds) throw new RuntimeSpecUnsupported(`${expr.kind} quantifier has no finite integer bounds`);
+  const planned = planBoundedIntegerQuantifier(expr);
+  if (!planned.ok) throw new RuntimeSpecUnsupported(planned.reason);
+  const plan = planned.value;
+  const bounds = await finiteRuntimeIntegerBounds(plan, context);
+  if (!bounds) throw new RuntimeSpecUnsupported(`${plan.kind} quantifier has no finite integer bounds`);
   const count = bounds.max - bounds.min + 1;
   if (!Number.isSafeInteger(count) || count < 0 || count > QUANTIFIER_LIMIT) {
-    throw new RuntimeSpecUnsupported(`${expr.kind} quantifier exceeds the ${QUANTIFIER_LIMIT}-value work limit`);
+    throw new RuntimeSpecUnsupported(`${plan.kind} quantifier exceeds the ${QUANTIFIER_LIMIT}-value work limit`);
   }
   for (let value = bounds.min; value <= bounds.max; value++) {
-    const truth = Boolean(await evaluateRuntimeSpec(body, withBinding(context, variable, value)));
-    if (expr.kind === "forall" && !truth) return false;
-    if (expr.kind === "exists" && truth) return true;
+    const truth = Boolean(await evaluateRuntimeSpec(plan.body, withBinding(context, plan.variable, value)));
+    if (plan.kind === "forall" && !truth) return false;
+    if (plan.kind === "exists" && truth) return true;
   }
-  return expr.kind === "forall";
+  return plan.kind === "forall";
 }
 
-function quantifierBoundsExpression(kind: string, body: TExpr): TExpr | null {
-  if (kind === "forall" && body.kind === "binop" && body.op === "==>") return body.left as TExpr;
-  return kind === "exists" ? body : null;
-}
-
-async function finiteIntegerBounds(
-  variable: string,
-  varTy: Ty | undefined,
-  expr: TExpr,
+async function finiteRuntimeIntegerBounds(
+  plan: BoundedIntegerQuantifier,
   context: RuntimeSpecContext,
 ): Promise<{ min: number; max: number } | null> {
-  let min = varTy?.kind === "nat" ? 0 : Number.NEGATIVE_INFINITY;
+  let min = plan.natural ? 0 : Number.NEGATIVE_INFINITY;
   let max = Number.POSITIVE_INFINITY;
-  for (const constraint of conjunctions(expr)) {
-    if (constraint.kind !== "binop" || !["<", "<=", ">", ">="].includes(String(constraint.op))) continue;
-    const left = constraint.left as TExpr;
-    const right = constraint.right as TExpr;
-    const leftVar = left.kind === "var" && left.name === variable;
-    const rightVar = right.kind === "var" && right.name === variable;
-    if (leftVar === rightVar) continue;
-    const boundExpr = leftVar ? right : left;
-    const bound = await evaluateRuntimeSpec(boundExpr, context);
+  for (const lower of plan.lowerBounds) {
+    const bound = await evaluateRuntimeSpec(lower.expression, context);
     if (typeof bound !== "number" || !Number.isFinite(bound) || !Number.isInteger(bound)) continue;
-    const op = leftVar ? String(constraint.op) : reverseComparison(String(constraint.op));
-    if (op === ">") min = Math.max(min, bound + 1);
-    else if (op === ">=") min = Math.max(min, bound);
-    else if (op === "<") max = Math.min(max, bound - 1);
-    else if (op === "<=") max = Math.min(max, bound);
+    min = Math.max(min, lower.inclusive ? bound : bound + 1);
+  }
+  for (const upper of plan.upperBounds) {
+    const bound = await evaluateRuntimeSpec(upper.expression, context);
+    if (typeof bound !== "number" || !Number.isFinite(bound) || !Number.isInteger(bound)) continue;
+    max = Math.min(max, upper.inclusive ? bound : bound - 1);
   }
   if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) return null;
   return max < min ? { min: 0, max: -1 } : { min, max };
-}
-
-function conjunctions(expr: TExpr): TExpr[] {
-  return expr.kind === "binop" && expr.op === "&&"
-    ? [...conjunctions(expr.left as TExpr), ...conjunctions(expr.right as TExpr)]
-    : [expr];
-}
-
-function reverseComparison(op: string): string {
-  if (op === "<") return ">";
-  if (op === "<=") return ">=";
-  if (op === ">") return "<";
-  return "<=";
 }
 
 function runtimeField(value: unknown, field: string): unknown {

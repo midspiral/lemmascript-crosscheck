@@ -316,11 +316,12 @@ Targets currently report `NOT CHECKED` when they require unsupported behavior su
 - `havoc`, `assume`, or other nondeterministic model behavior;
 - preconditions outside the implemented typed-expression evaluator.
 
-Runtime contract checks support the same ordinary expression forms with
-JavaScript arithmetic, comparison, and equality semantics. Integer/natural
-quantifiers are supported when their finite bounds can be derived completely
-from the current input; an unbounded or excessively large quantifier is
-reported as `NOT CHECKED`.
+The exact precondition evaluator and the runtime contract evaluator both
+support bounded integer and natural quantifiers when their finite bounds can be
+derived completely from the current input. Crosscheck enumerates the range
+with exact integers for differential checking and JavaScript numbers for
+runtime contract checking. A quantifier that is unbounded or exceeds the
+10,000-value work limit is reported as `NOT CHECKED`.
 
 ## How an audit works
 
