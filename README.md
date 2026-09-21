@@ -290,7 +290,12 @@ Every issue is saved under a stable ten-character ID derived from the source
 and runtime contents, target mapping, category, and recorded witness.
 Differential witnesses are minimized when appropriate; runtime contract
 witnesses retain the TypeScript tuple that was executed. Crosscheck prints a
-complete replay command:
+complete replay command. In a multi-target summary, every issue ID appears
+beside `ISSUE`, followed by the target name. Pass that ID to `--replay`. Add `--details`
+to the original audit command to show every complete finding and replay command,
+or use `--json` to read the IDs from `targets[].issue.id`.
+
+For example, replay a saved `arraySum` witness:
 
 ```sh
 lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts \

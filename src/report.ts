@@ -136,14 +136,17 @@ function renderSuite(report: AuditReport): string {
     "",
   ];
   const ordered = [...issues, ...incomplete, ...clean];
+  const statusWidth = issues.length > 0 ? 18 : 13;
+  const targetWidth = Math.max(22, ...ordered.map(target => target.target.length + 2));
   for (const target of ordered) {
     const label = target.conclusion === "issue" ? "ISSUE" : target.conclusion === "not-checked" ? "NOT CHECKED" : "NO ISSUE";
     const detail = target.issue?.summary ?? target.reason
       ?? (target.evidence === "exhaustive" ? "exhaustive singleton domain" : `sampled ${target.cases} inputs`);
-    lines.push(`${label.padEnd(13)}${target.target.padEnd(22)}${detail}`);
+    const status = target.issue ? `${label} ${target.issue.id}` : label;
+    lines.push(`${status.padEnd(statusWidth)}${target.target.padEnd(targetWidth)}${detail}`);
   }
   if (issues[0]?.issue) {
-    lines.push("", `Explain an issue: ${replayCommand(report, issues[0].issue.id)}`);
+    lines.push("", `Replay an issue: ${replayCommand(report, issues[0].issue.id)}`, "Use any issue ID above; --details shows every finding in full.");
   }
   return lines.join("\n");
 }
