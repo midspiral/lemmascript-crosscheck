@@ -1,6 +1,7 @@
 # LemmaScript Crosscheck
 
 Counterexample-driven runtime transfer checking for [LemmaScript](https://github.com/midspiral/LemmaScript).
+Find replayable soundness issues in [LemmaScript](https://github.com/midspiral/LemmaScript) by comparing verified models with executable TypeScript.
 
 LemmaScript proves properties about a mathematical model of a TypeScript program. Crosscheck asks the next question: does the executable TypeScript still behave like that verified model under JavaScript semantics?
 
@@ -12,13 +13,15 @@ LemmaScript source ──verify──> compiled Dafny model
 
 Crosscheck generates proof-valid inputs, runs the verified model and the JavaScript export in isolated workers, and compares their observable behavior. When they disagree, it shrinks the input when appropriate and saves a deterministic replay case.
 
+The repository also maintains an executable collection of known soundness issues, including mutable closures, integer precision, and caller-visible mutation. These examples exercise the same checker used on your code; an audit can discover mismatches without an entry in the collection. See [Add a known soundness issue](TUTORIAL_DEV.md#add-a-known-soundness-issue) to contribute a case.
+
 It currently finds:
 
 - integer precision, formal-input representation gaps, and result-changing input rounding;
 - exact-real versus binary floating-point differences;
 - TypeScript inputs admitted beyond the verified parameter domain;
 - false runtime postconditions on precondition-valid TypeScript inputs;
-- ordinary result mismatches;
+- result mismatches, including translation errors such as stale closure captures;
 - caller-visible input mutation;
 - omitted properties versus properties set to `undefined`;
 - unexpected console or standard output, exceptions, and timeouts.
@@ -358,4 +361,4 @@ npm run typecheck
 npm run build
 ```
 
-The implementation lives in `src/`, with focused unit tests in `test/`. Start with [TUTORIAL_DEV.md](TUTORIAL_DEV.md) for a guided codebase tour and a worked example of adding an issue category. The authoritative architecture and design decisions are documented in [DESIGN.md](DESIGN.md); the exact operational procedure, including generation and finding precedence, is in [ALGORITHM.md](ALGORITHM.md).
+The implementation lives in `src/`, with focused unit tests in `test/`. Start with [TUTORIAL_DEV.md](TUTORIAL_DEV.md) for adding known soundness issues, a guided codebase tour, and a worked example of adding an issue category. The authoritative architecture and design decisions are documented in [DESIGN.md](DESIGN.md); the exact operational procedure, including generation and finding precedence, is in [ALGORITHM.md](ALGORITHM.md).

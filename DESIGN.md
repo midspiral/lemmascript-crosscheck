@@ -416,7 +416,7 @@ LEMMASCRIPT=/path/to/LemmaScript npm run test:integration
 
 One CI job runs this suite against LemmaScript `main` with Dafny 4.11.0; the Node unit-test jobs do not need those toolchains. The corpus covers mutable captures from [LemmaScript#267](https://github.com/midspiral/LemmaScript/issues/267), integer precision loss, and caller-visible input mutation. It also checks an unchanged capture as a positive control and keeps an unsupported helper call visibly `NOT CHECKED`.
 
-To add a counterexample, put its minimal TypeScript source in `test/fixtures/` and add a test using `auditFixture` from `test/integration/harness.ts`. The helper isolates generated files and caches, checks the CLI exit status, and replays every reported issue; the test asserts the expected category and concrete witness, or the specific `NOT CHECKED` reason. New cases run in the same CI job. When `main` fixes a behavior, review and update its expected outcome.
+See [Add a known soundness issue](TUTORIAL_DEV.md#add-a-known-soundness-issue) for the fixture and test recipe.
 
 Additional end-to-end examples live in the adjacent LemmaScript repository. The important behaviors are:
 
