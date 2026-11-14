@@ -59,3 +59,42 @@ jobs:
           actual_version="$(./node_modules/.bin/lemmascript-crosscheck --version)"
           test "$actual_version" = "$expected_version"
           ./node_modules/.bin/lemmascript-crosscheck --help | grep '^Usage:' > /dev/null
+
+  integration:
+    name: Soundness issues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check out LemmaScript
+        uses: actions/checkout@v6
+        with:
+          repository: midspiral/LemmaScript
+          ref: main
+          path: .test-lemmascript
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install LemmaScript dependencies
+        run: npm ci
+        working-directory: .test-lemmascript
+
+      - name: Build LemmaScript
+        run: npm run build
+        working-directory: .test-lemmascript
+
+      - name: Set up Dafny
+        uses: ./.test-lemmascript/.github/actions/setup-dafny
+
+      - name: Test with real toolchain
+        run: npm run test:integration
+        env:
+          LEMMASCRIPT: ${{ github.workspace }}/.test-lemmascript

@@ -2,6 +2,10 @@
 
 This is the practical guide to the LemmaScript Crosscheck codebase. [DESIGN.md](DESIGN.md) remains the authoritative behavioral contract, while [ALGORITHM.md](ALGORITHM.md) gives the exact current search and comparison procedure. This tutorial explains how to read, run, test, and safely extend the implementation.
 
+To contribute a counterexample, start with [Add a known soundness issue](#add-a-known-soundness-issue). Most known issues fit an existing category such as `result-mismatch`; their specific cause belongs in the fixture explanation.
+
+The [soundness issue catalog](SOUNDNESS_ISSUES.md) inventories the collected causes, every report category, and the evidence behind each detector. The [example walkthroughs](examples/README.md) explain the verified and runtime behavior of each program.
+
 ## How hard is a new issue category?
 
 It depends on whether Crosscheck already observes the fact you want to classify:
@@ -54,6 +58,43 @@ LEMMASCRIPT_CROSSCHECK_BUILD_CACHE=/tmp/lemmascript-crosscheck-dev-build \
 ```
 
 The two cache overrides keep experiments separate from normal saved cases and compiled models. There is no `--debug` option. When temporarily instrumenting a worker, write diagnostics to standard error: worker standard output is the JSON-lines protocol.
+
+## Add a known soundness issue
+
+Add a minimal, self-contained TypeScript source in `test/fixtures/` with an exported function that preserves the behavior you want to examine. Include a short explanation of the disagreement and a link to the originating issue or real-code example when available. The existing [integer-precision fixture](test/fixtures/integer-precision.ts) shows the shape:
+
+```ts
+//@ ensures \result === x + 1
+export function increment(x: number): number {
+  return x + 1;
+}
+```
+
+Add a test in [soundness.test.ts](test/integration/soundness.test.ts) that asserts the observed category and concrete witness. The corresponding integer-precision test is:
+
+```ts
+test("integer arithmetic exposes a result mismatch on an exact input", async t => {
+  const report = await auditFixture(t, "integer-precision.ts", 1, ["--cases", "40"]);
+  assert.equal(report.targets.length, 1);
+  const issue = report.targets[0]?.issue;
+  assert.equal(issue?.category, "result-mismatch");
+  assert.deepEqual(decode(issue!.args), [9_007_199_254_740_992n]);
+  assert.equal(issue?.modelResult, "9007199254740993");
+  assert.equal(decode(issue!.runtimeResult!), 9_007_199_254_740_992);
+});
+```
+
+The shared [auditFixture helper](test/integration/harness.ts) copies the source into a temporary directory, verifies it, executes both versions, and replays every reported issue. Its third argument is the expected CLI exit code: `1` for an issue, `0` for no issue found, or `2` for `NOT CHECKED`. The helper currently copies only the TypeScript source, so fixtures should verify from their annotations without handwritten proof companions. Generated Dafny files and saved-case caches stay outside the collection.
+
+If an issue cannot yet reach comparison, assert `NOT CHECKED` and the specific reason, as the helper-call case does. This records a coverage gap. For a positive control, assert both `no-issue` and a nonzero executed case count, as the unchanged closure capture does.
+
+With Dafny 4.11.x installed and a LemmaScript checkout on `main` with its dependencies installed, run:
+
+```sh
+LEMMASCRIPT=/absolute/path/to/LemmaScript npm run test:integration
+```
+
+The command builds Crosscheck and runs the full issue suite. New cases automatically use the existing **Soundness issues** CI job against LemmaScript `main`. When a compiler fix changes an outcome, keep the example and update its expectations after inspecting the new behavior. A fixture with a deliberately false postcondition may correctly stop at verification once the translation is fixed.
 
 ## The four representations
 
@@ -374,7 +415,7 @@ Use the narrowest seam that proves the behavior, then add integration coverage w
 | Worker protocol | `runtime-worker.test.ts`, `json-line-client.test.ts` | Capture, malformed output, process death, restart |
 | Audit loop with mocked workers | `audit.test.ts` | Classification, precedence, shrinking policy, `NOT CHECKED` behavior |
 | Report/CLI | `report.test.ts`, `cli.test.ts` | Wording, stable fields, exit codes, fatal JSON |
-| Whole toolchain | `../LemmaScript/examples` | Metadata, proof, compile, marshal, runtime, report together |
+| Whole toolchain | `test/integration/soundness.test.ts` | Metadata, proof, compile, marshal, runtime, report, and saved-case replay together |
 | Packed consumer | `.github/workflows/ci.yml` | Published file set and executable CLI |
 
 `startWorkers` is the audit engine's main process seam, while `auditTarget` accepts `AuditWorkers` directly. Most new classification behavior can therefore be tested cheaply with deterministic fake clients instead of invoking Dafny.

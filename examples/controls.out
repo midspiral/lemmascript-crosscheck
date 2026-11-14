@@ -1,0 +1,17 @@
+$ lemmascript-crosscheck examples/controls.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+nextBigTicket — NO ISSUE FOUND
+Evidence: 40 sampled proof-valid inputs · seed 17 · not a proof
+
+copiedCartTotal — NO ISSUE FOUND
+Evidence: exhaustive input domain (the function has no parameters)
+
+fixedDiscountQuote — NO ISSUE FOUND
+Evidence: exhaustive input domain (the function has no parameters)
+
+primitiveKeyPrice — NO ISSUE FOUND
+Evidence: 40 sampled proof-valid inputs · seed 17 · not a proof
+
+copiedSeatPreview — NO ISSUE FOUND
+Evidence: 40 sampled proof-valid inputs · seed 17 · not a proof

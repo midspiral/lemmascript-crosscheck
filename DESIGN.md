@@ -408,7 +408,17 @@ npm pack --dry-run
 
 Continuous integration runs this sequence on Node.js 22 and 24. It also installs the generated tarball into an empty project, confirms that the packaged CLI reports the manifest version and renders help, and rejects tarballs containing compiled tests.
 
-End-to-end regression fixtures live in the adjacent LemmaScript repository. The important behaviors are:
+The soundness issue tests in `test/integration/soundness.test.ts` run through real LemmaScript verification, Dafny compilation, JavaScript execution, reporting, and saved-case replay:
+
+```sh
+LEMMASCRIPT=/path/to/LemmaScript npm run test:integration
+```
+
+One CI job runs this suite against LemmaScript `main` with Dafny 4.11.0; the Node unit-test jobs do not need those toolchains. The corpus covers mutable captures from [LemmaScript#267](https://github.com/midspiral/LemmaScript/issues/267), integer precision loss, and caller-visible input mutation. It also checks an unchanged capture as a positive control and keeps an unsupported helper call visibly `NOT CHECKED`.
+
+See [Add a known soundness issue](TUTORIAL_DEV.md#add-a-known-soundness-issue) for the fixture and test recipe.
+
+Additional end-to-end examples live in the adjacent LemmaScript repository. The important behaviors are:
 
 | Fixture | Expected behavior |
 | --- | --- |

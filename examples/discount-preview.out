@@ -1,0 +1,23 @@
+$ lemmascript-crosscheck examples/discount-preview.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+previewBeforeSale — ISSUE FOUND
+JavaScript returned a different result from the verified model.
+
+Input
+  (no arguments)
+
+Result
+  verified    10000
+  JavaScript  9500
+
+Cause
+  Whole-function differential execution found unequal observable results.
+
+Resolve
+  Inspect the source and generated model to locate the differing behavior for this input.
+
+Replay
+  lemmascript-crosscheck examples/discount-preview.ts --replay 14c249a17a
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

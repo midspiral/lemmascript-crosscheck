@@ -1,0 +1,46 @@
+$ lemmascript-crosscheck examples/nan-and-mutation.ts --cases 40 --seed 17 --details --checks contract,differential
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+clampNonNegative — ISSUE FOUND
+TypeScript violates a postcondition on a precondition-valid runtime input.
+
+Input
+  x           NaN
+
+JavaScript result
+  NaN
+
+Violated contract
+  postcondition clause 1
+
+Cause
+  Runtime postcondition clause 1 evaluated to false using JavaScript semantics.
+
+Resolve
+  Repair the TypeScript implementation or strengthen and enforce its runtime precondition.
+
+Replay
+  lemmascript-crosscheck examples/nan-and-mutation.ts --replay 49dd12ed96
+
+Evidence: executed TypeScript contract counterexample
+
+readAfterMutation — ISSUE FOUND
+JavaScript returned a different result from the verified model.
+
+Input
+  (no arguments)
+
+Result
+  verified    2
+  JavaScript  6
+
+Cause
+  Whole-function differential execution found unequal observable results.
+
+Resolve
+  Inspect the source and generated model to locate the differing behavior for this input.
+
+Replay
+  lemmascript-crosscheck examples/nan-and-mutation.ts --replay e5eaebddb0
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

@@ -1,0 +1,23 @@
+$ lemmascript-crosscheck examples/next-ticket.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+nextTicket — ISSUE FOUND
+JavaScript returned a different result from the verified model.
+
+Input
+  last        9007199254740992
+
+Result
+  verified    9007199254740993
+  JavaScript  9007199254740992
+
+Cause
+  Whole-function differential execution found unequal observable results.
+
+Resolve
+  Inspect the source and generated model to locate the differing behavior for this input.
+
+Replay
+  lemmascript-crosscheck examples/next-ticket.ts --replay 4af699dcda
+
+Evidence: replayed counterexample · Dafny 4.11.0 model
