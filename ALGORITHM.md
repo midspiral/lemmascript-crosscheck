@@ -642,7 +642,7 @@ if incomplete exists:
 if firstProjectedIssue exists:
   save when enabled and return ISSUE FOUND
 if firstDomainWitness exists:
-  minimize when permitted, save when enabled, and return ISSUE FOUND
+  save the original witness when enabled and return ISSUE FOUND
 if checked == 0:
   return NOT CHECKED(no generated input satisfied the precondition)
 return NO ISSUE FOUND
@@ -807,22 +807,21 @@ shrink evaluations do not carry a runtime variant; in the corner case where a
 presence variant produced an ordinary mutation/output category, minimization
 therefore tests that category against canonical runtime arguments.
 
-An input-domain witness is currently shrunk whenever this is not a replay. Its
-predicate requires only that a fresh evaluation be `unrepresentable`; it does
-not require the same bridge failure, path, or formal type validity.
+Input-domain witnesses are not shrunk. The report and saved case retain the
+original precondition-valid arguments and bridge failure. Replaying those
+arguments reevaluates the same domain boundary.
 
 `proof-domain-gap` and `runtime-postcondition-violation` witnesses are not
 shrunk. They retain the runtime value tuple that was actually executed and the
 associated domain path or failed clause; reports label this as executed rather
 than minimized-and-replayed evidence.
 
-This is an important current limitation: the shrinker is representation-driven,
-not type-directed. It can shorten a finite
-string-union member, alter a discriminant, or remove tuple elements, thereby
-constructing a value the typed generator would never emit. This correctness
-gap and its containment plan are recorded as P0 in [TODO.md](TODO.md). This
-section describes the implementation as it exists; it does not assert that
-such a minimized input-domain witness is sound.
+The shrinker remains representation-driven, not type-directed. It can shorten
+a finite string-union member, alter a discriminant, or remove tuple elements,
+thereby constructing a value the typed generator would never emit. Retaining
+input-domain witnesses prevents these reductions from replacing a numeric
+representation failure with an invalid-type report. Type-directed shrinking
+and preservation of failure reasons remain future work in [TODO.md](TODO.md).
 
 ## 12. Issue identity, persistence, and replay
 

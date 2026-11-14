@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { auditTarget, type AuditOptions } from "../src/audit.js";
+import { loadCase } from "../src/cases.js";
 import { decode, encode, type Encoded } from "../src/codec.js";
 import type { TypedFunction, TypedInfo } from "../src/ir.js";
 import { WorkerTimeoutError, type JsonLineRequestClient } from "../src/json-line-client.js";
@@ -133,6 +137,78 @@ test("differential audits cross bounded forall preconditions and reach represent
   assert.equal(report.issue?.category, "input-domain");
   assert.equal(report.cases, 5);
 });
+
+const domainFixtures: {
+  name: string;
+  params: TypedFunction["params"];
+  typeDecls: TypedInfo["typeDecls"];
+  expectedArgs: unknown[];
+  failurePath: string;
+}[] = [
+  {
+    name: "tagged union",
+    params: [{ name: "action", ty: { kind: "user", name: "Action" }, tsType: "Action" }],
+    typeDecls: [{
+      name: "Action",
+      kind: "discriminated-union",
+      discriminant: "kind",
+      variants: [
+        { name: "add", fields: [{ name: "amount", type: { kind: "int" }, tsType: "number" }] },
+        { name: "clear", fields: [] },
+      ],
+    }],
+    expectedArgs: [{ kind: "add", amount: 9_007_199_254_740_993n }],
+    failurePath: "action.amount",
+  },
+  {
+    name: "finite string union",
+    params: [
+      { name: "mode", ty: { kind: "user", name: "Mode" }, tsType: "Mode" },
+      { name: "value", ty: { kind: "int" }, tsType: "number" },
+    ],
+    typeDecls: [{ name: "Mode", kind: "string-union", values: ["fast", "slow"] }],
+    expectedArgs: ["fast", 9_007_199_254_740_993n],
+    failurePath: "value",
+  },
+];
+
+for (const fixture of domainFixtures) {
+  test(`input-domain witnesses preserve the ${fixture.name} through saving and replay`, async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "lemmascript-crosscheck-domain-"));
+    const previous = process.env.LEMMASCRIPT_CROSSCHECK_CACHE;
+    process.env.LEMMASCRIPT_CROSSCHECK_CACHE = root;
+    t.after(async () => {
+      if (previous === undefined) delete process.env.LEMMASCRIPT_CROSSCHECK_CACHE;
+      else process.env.LEMMASCRIPT_CROSSCHECK_CACHE = previous;
+      await rm(root, { recursive: true, force: true });
+    });
+
+    const fn: TypedFunction = { ...arrayFn, params: fixture.params };
+    const typedInfo: TypedInfo = { ...info, functions: [fn], typeDecls: fixture.typeDecls };
+    const runtime = client(async message => ({
+      status: "ok", result: encode(0), before: message.args, after: message.args, console: [],
+    }));
+    const workers: AuditWorkers = { model: modelClient(), runtime, close() {} };
+
+    const report = await auditTarget(fn, typedInfo, identity, workers, { ...options, saveCases: true });
+
+    assert.equal(report.conclusion, "issue");
+    assert.equal(report.issue?.category, "input-domain");
+    assert.deepEqual(decode(report.issue!.args), fixture.expectedArgs);
+    assert.equal(report.issue?.formalPath, fixture.failurePath);
+    assert.equal(decode(report.issue!.formalValue!), 9_007_199_254_740_993n);
+    assert.equal(report.issue?.diagnosis, "JavaScript number cannot represent this integer exactly");
+
+    const stored = await loadCase(report.issue!.id);
+    assert.equal(stored.category, "input-domain");
+    assert.deepEqual(decode(stored.args), fixture.expectedArgs);
+    const replay = await auditTarget(fn, typedInfo, identity, workers, { ...options, replay: stored });
+    assert.equal(replay.conclusion, "issue");
+    for (const key of ["id", "category", "args", "formalPath", "formalValue", "diagnosis"] as const) {
+      assert.deepEqual(replay.issue?.[key], report.issue?.[key], key);
+    }
+  });
+}
 
 test("runtime timeout witnesses are not shrunk against a poisoned worker", async () => {
   let poisoned = false;

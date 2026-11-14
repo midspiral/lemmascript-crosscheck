@@ -23,7 +23,7 @@ An item is complete only when its behavior is covered by focused tests and the r
 
 That is not safe for formal values with structural constraints. A string may represent a finite string union, an object field may be a discriminant, and an array may be a fixed-length tuple or be constrained by a precondition.
 
-Input-domain shrinking makes the problem observable. Its current predicate accepts any candidate whose bridge result is still `unrepresentable`, even when the reason has changed and the candidate is no longer a value of the formal parameter type.
+Input-domain shrinking made the problem observable: it accepted any candidate whose bridge result was still `unrepresentable`, even when the reason changed and the candidate was no longer a value of the formal parameter type. Input-domain findings now retain their original precondition-valid arguments and bridge failure without shrinking; the generic shrinker remains representation-directed.
 
 ### Observed failures
 
@@ -31,14 +31,14 @@ Input-domain shrinking makes the problem observable. Its current predicate accep
 - ColorWheel `normalizeModel` changed a valid `Mood` member to `""`, then reported that `""` was not a member of `Mood`.
 - Both reports suggested `Use bigint`, even though their displayed failures were invalid union members rather than numeric representation failures.
 
-These minimized witnesses are not formal counterexamples. Their replay files reproduce a bridge rejection created by the shrinker, not the original model/runtime boundary problem. Issue IDs are also derived from the fabricated minimized values.
+These minimized witnesses were not formal counterexamples. Their replay files reproduce a bridge rejection created by the shrinker, not the original model/runtime boundary problem. Issue IDs were also derived from the fabricated minimized values. Existing saved cases are unchanged; rerun the audit to replace them with original validated witnesses.
 
 ### Immediate containment
 
-- [ ] Do not shrink `input-domain` witnesses with the generic shrinker.
-- [ ] Save and report the original precondition-valid candidate produced by the typed generator.
-- [ ] Add regression tests proving that the ClearSplit- and ColorWheel-shaped examples retain valid tags/string-union members.
-- [ ] State explicitly in code why input-domain shrinking is disabled, as is already done for stateful runtime timeouts.
+- [x] Do not shrink `input-domain` witnesses with the generic shrinker.
+- [x] Save and report the original precondition-valid candidate produced by the typed generator.
+- [x] Add regression tests proving that tagged-union and finite-string-union examples retain valid members and replay the original numeric failure.
+- [x] State explicitly in code why input-domain shrinking is disabled, as is already done for stateful runtime timeouts.
 
 This containment is preferable to a small ad hoc tag exception: it restores trustworthy evidence while the proper type-directed implementation is built.
 

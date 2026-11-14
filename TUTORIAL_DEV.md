@@ -200,6 +200,8 @@ This ordering is product behavior. Adding a check above result comparison can hi
 
 Most executable findings use the generic shrink loop. `optional-presence` and `input-representation-mismatch` retain paired model/runtime representations, and `runtime-timeout` is intentionally not shrunk because the timed-out worker was killed and timing is stateful. A new category must explicitly decide whether the generic relation is safe.
 
+`input-domain` findings retain the original precondition-valid arguments and bridge failure without shrinking. The generic shrinker can invalidate a union member or tuple shape; accepting any subsequent bridge failure would report that malformed value as a counterexample. These findings are saved and replayed with their original arguments.
+
 [`src/cases.ts`](src/cases.ts) derives the ten-character ID from the source and runtime entry hashes, target and runtime export, category, and encoded witness. Saved cases include both paths and hashes plus the arguments and representation variant when needed. Replay restores the recorded runtime automatically, prints alternate runtimes explicitly, and rejects changed source or runtime contents. A byte-identical module may be replayed from a new path.
 
 Changing category assignment changes issue IDs. Adding a category is also visible in the stable report v1 and case v2 formats; treat schema compatibility as part of the change, not as an internal detail.

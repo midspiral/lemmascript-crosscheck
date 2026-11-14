@@ -485,16 +485,10 @@ async function auditDifferentialTarget(
     return await issueReport(fn, runtimeTarget, identity, checked, options, projectedIssue);
   }
   if (domainWitness) {
-    let witness = domainWitness;
-    if (!options.replay) {
-      const minimized = await shrinkArgs(witness.args, async candidate => {
-        const result = await evaluate(candidate);
-        return result.kind === "unrepresentable";
-      });
-      const result = await evaluate(minimized);
-      if (result.kind === "unrepresentable") witness = { args: minimized, failure: result.failure! };
-    }
-    return await domainIssueReport(fn, runtimeTarget, identity, checked, options, witness);
+    // Retain the precondition-valid input and its original bridge failure.
+    // The representation-directed shrinker can invalidate union members or
+    // tuple shapes and mistake that invalid value for another domain witness.
+    return await domainIssueReport(fn, runtimeTarget, identity, checked, options, domainWitness);
   }
   if (checked === 0) {
     return notChecked(fn.name, runtimeTarget, options, "no generated input satisfied the verified precondition", "Increase --cases or strengthen the generator for this precondition.");
