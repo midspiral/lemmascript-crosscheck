@@ -408,7 +408,7 @@ npm pack --dry-run
 
 Continuous integration runs this sequence on Node.js 22 and 24. It also installs the generated tarball into an empty project, confirms that the packaged CLI reports the manifest version and renders help, and rejects tarballs containing compiled tests.
 
-The soundness regressions in `test/integration/soundness.test.ts` run through real LemmaScript verification, Dafny compilation, JavaScript execution, reporting, and saved-case replay:
+The soundness issue tests in `test/integration/soundness.test.ts` run through real LemmaScript verification, Dafny compilation, JavaScript execution, reporting, and saved-case replay:
 
 ```sh
 LEMMASCRIPT=/path/to/LemmaScript npm run test:integration

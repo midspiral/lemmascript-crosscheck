@@ -61,7 +61,7 @@ jobs:
           ./node_modules/.bin/lemmascript-crosscheck --help | grep '^Usage:' > /dev/null
 
   integration:
-    name: Soundness regressions
+    name: Soundness issues
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
