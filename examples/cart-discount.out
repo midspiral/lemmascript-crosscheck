@@ -1,0 +1,23 @@
+$ lemmascript-crosscheck examples/cart-discount.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+originalCartTotal — ISSUE FOUND
+JavaScript returned a different result from the verified model.
+
+Input
+  (no arguments)
+
+Result
+  verified    65
+  JavaScript  40
+
+Cause
+  Whole-function differential execution found unequal observable results.
+
+Resolve
+  Inspect the source and generated model to locate the differing behavior for this input.
+
+Replay
+  lemmascript-crosscheck examples/cart-discount.ts --replay 7ec921eb19
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

@@ -1,0 +1,24 @@
+$ lemmascript-crosscheck examples/split-bill.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+perPerson — ISSUE FOUND
+JavaScript returned a different result from the verified model.
+
+Input
+  totalCents  1
+  people      3
+
+Result
+  verified    (1.0 / 3.0)
+  JavaScript  0.3333333333333333 (exactly 0.333333333333333314829616256247390992939472198486328125)
+
+Cause
+  Whole-function differential execution found unequal observable results.
+
+Resolve
+  Inspect the source and generated model to locate the differing behavior for this input.
+
+Replay
+  lemmascript-crosscheck examples/split-bill.ts --replay 39df5522d7
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

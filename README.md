@@ -15,6 +15,10 @@ Crosscheck generates proof-valid inputs, runs the verified model and the JavaScr
 
 The repository also maintains an executable collection of known soundness issues, including mutable closures, integer precision, and caller-visible mutation. These examples exercise the same checker used on your code; an audit can discover mismatches without an entry in the collection. See [Add a known soundness issue](TUTORIAL_DEV.md#add-a-known-soundness-issue) to contribute a case.
 
+Browse [the examples](examples/README.md) for explanations of where verified Dafny models and JavaScript executions disagree.
+Each source has a companion `.out` with the observed Crosscheck report; `npm run examples:check` verifies and replays the collection, including correct controls.
+The [soundness issue catalog](SOUNDNESS_ISSUES.md) maps every collected issue family to its detector, evidence, and coverage limits.
+
 It currently finds:
 
 - integer precision, formal-input representation gaps, and result-changing input rounding;

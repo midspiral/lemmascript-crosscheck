@@ -1,0 +1,31 @@
+$ lemmascript-crosscheck examples/request-identity.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+sameRequest — ISSUE FOUND
+JavaScript input rounding changes the result.
+
+Formal input
+  left        9007199254740992
+  right       9007199254740993
+
+JavaScript representation
+  left        9007199254740992
+  right       9007199254740992
+
+Precision loss
+  right       9007199254740993 → 9007199254740992
+
+Result
+  verified    false
+  JavaScript  true
+
+Cause
+  JavaScript's IEEE-754 number representation rounds an exact formal numeric input before the function executes; distinct formal values can therefore collapse to the same runtime value.
+
+Resolve
+  Use an exact runtime representation, or restrict and enforce inputs to values that remain exact as JavaScript numbers.
+
+Replay
+  lemmascript-crosscheck examples/request-identity.ts --replay 86ea07ffdc
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

@@ -4,6 +4,8 @@ This is the practical guide to the LemmaScript Crosscheck codebase. [DESIGN.md](
 
 To contribute a counterexample, start with [Add a known soundness issue](#add-a-known-soundness-issue). Most known issues fit an existing category such as `result-mismatch`; their specific cause belongs in the fixture explanation.
 
+The [soundness issue catalog](SOUNDNESS_ISSUES.md) inventories the collected causes, every report category, and the evidence behind each detector. The [example walkthroughs](examples/README.md) explain the verified and runtime behavior of each program.
+
 ## How hard is a new issue category?
 
 It depends on whether Crosscheck already observes the fact you want to classify:

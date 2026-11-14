@@ -1,0 +1,28 @@
+$ lemmascript-crosscheck examples/config-defaults.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+configure — ISSUE FOUND
+JavaScript distinguishes an omitted property from a present undefined property.
+
+Input
+  base        { retries: 0 }
+  override    {  }
+
+JavaScript representation
+  base        { retries: 0 }
+  override    { retries: <present undefined> }
+
+Result
+  verified    RetryConfig.RetryConfig(Option.Some(0))
+  JavaScript  { retries: <present undefined> } (exactly RetryConfig.RetryConfig(Option.None))
+
+Cause
+  The formal optional value is absent in both cases, but JavaScript object spread and property presence can observe the difference.
+
+Resolve
+  Canonicalize optional records at the boundary, or extend the formal representation to track property presence.
+
+Replay
+  lemmascript-crosscheck examples/config-defaults.ts --replay d6145be764
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

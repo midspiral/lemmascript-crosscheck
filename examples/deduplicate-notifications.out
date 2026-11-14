@@ -1,0 +1,23 @@
+$ lemmascript-crosscheck examples/deduplicate-notifications.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+alreadyNotified — ISSUE FOUND
+JavaScript returned a different result from the verified model.
+
+Input
+  recipientId "a"
+
+Result
+  verified    true
+  JavaScript  false
+
+Cause
+  Whole-function differential execution found unequal observable results.
+
+Resolve
+  Inspect the source and generated model to locate the differing behavior for this input.
+
+Replay
+  lemmascript-crosscheck examples/deduplicate-notifications.ts --replay 271b9b3fc8
+
+Evidence: replayed counterexample · Dafny 4.11.0 model

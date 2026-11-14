@@ -28,6 +28,7 @@
   "files": [
     "dist/src",
     "README.md",
+    "SOUNDNESS_ISSUES.md",
     "TUTORIAL.md",
     "TUTORIAL_DEV.md",
     "ALGORITHM.md",
@@ -41,6 +42,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "test:integration": "npm run build && node --import tsx --test test/integration/*.test.ts",
+    "examples:check": "npm run build && node examples/run.mjs",
+    "examples:update": "npm run build && node examples/run.mjs --update",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

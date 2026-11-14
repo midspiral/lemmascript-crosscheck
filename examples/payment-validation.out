@@ -1,0 +1,26 @@
+$ lemmascript-crosscheck examples/payment-validation.ts --cases 40 --seed 17 --details --checks contract,differential
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+canPay — ISSUE FOUND
+TypeScript violates a postcondition on a precondition-valid runtime input.
+
+Input
+  balance     0
+  amount      NaN
+
+JavaScript result
+  true
+
+Violated contract
+  postcondition clause 1
+
+Cause
+  Runtime postcondition clause 1 evaluated to false using JavaScript semantics.
+
+Resolve
+  Repair the TypeScript implementation or strengthen and enforce its runtime precondition.
+
+Replay
+  lemmascript-crosscheck examples/payment-validation.ts --replay 71a1d2141b
+
+Evidence: executed TypeScript contract counterexample

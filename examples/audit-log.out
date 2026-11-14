@@ -1,0 +1,23 @@
+$ lemmascript-crosscheck examples/audit-log.ts --cases 40 --seed 17 --details
+Verified with LemmaScript 0.6.9; Dafny 4.11.0.
+
+appendLogin — ISSUE FOUND
+JavaScript mutates an input absent from the verified model.
+
+Input
+  events      []
+
+Observed arguments
+  before      [[]]
+  after       [["login"]]
+
+Cause
+  LemmaScript models the argument as an immutable value, but the caller-visible JavaScript argument changed.
+
+Resolve
+  Return a new value, or add caller-visible mutation to the formal effect model.
+
+Replay
+  lemmascript-crosscheck examples/audit-log.ts --replay 2f32284db3
+
+Evidence: replayed counterexample · Dafny 4.11.0 model
