@@ -408,7 +408,15 @@ npm pack --dry-run
 
 Continuous integration runs this sequence on Node.js 22 and 24. It also installs the generated tarball into an empty project, confirms that the packaged CLI reports the manifest version and renders help, and rejects tarballs containing compiled tests.
 
-End-to-end regression fixtures live in the adjacent LemmaScript repository. The important behaviors are:
+The closure regressions in `test/fixtures/` run through real LemmaScript verification, Dafny compilation, JavaScript execution, reporting, and saved-case replay:
+
+```sh
+LEMMASCRIPT=/path/to/LemmaScript npm run test:integration
+```
+
+CI pins LemmaScript to `406d36187bcf1ed792a427f0925c3699c7346d98` and Dafny to 4.11.0 to preserve the known translation bugs from [LemmaScript#267](https://github.com/midspiral/LemmaScript/issues/267). The tests detect reassignment, array mutation, and alias mutation after closure creation, check an unchanged capture as a positive control, and keep an unsupported helper call visibly `NOT CHECKED`. Updating the compiler pin requires reviewing these expectations.
+
+Additional end-to-end examples live in the adjacent LemmaScript repository. The important behaviors are:
 
 | Fixture | Expected behavior |
 | --- | --- |

@@ -783,7 +783,7 @@ async function issueReport(
     category: observed.category,
     args: idWitness,
   });
-  const language = issueLanguage(observed.category, fn.returnTy);
+  const language = issueLanguage(observed.category);
   const issue: Issue = {
     id,
     category: observed.category,
@@ -962,30 +962,16 @@ async function domainIssueReport(
   return { target: fn.name, runtimeTarget, conclusion: "issue", evidence: "counterexample", cases, seed: options.seed, issue };
 }
 
-function issueLanguage(category: DifferentialIssueCategory, returnTy: Ty): { summary: string; diagnosis: string; resolution: string } {
+function issueLanguage(category: DifferentialIssueCategory): { summary: string; diagnosis: string; resolution: string } {
   if (category === "input-representation-mismatch") return {
     summary: "JavaScript input rounding changes the result",
     diagnosis: "JavaScript's IEEE-754 number representation rounds an exact formal numeric input before the function executes; distinct formal values can therefore collapse to the same runtime value.",
     resolution: "Use an exact runtime representation, or restrict and enforce inputs to values that remain exact as JavaScript numbers.",
   };
-  if (category === "result-mismatch" && (returnTy.kind === "int" || returnTy.kind === "nat") && !returnTy.big) {
-    return {
-      summary: "result differs because JavaScript integer arithmetic lost precision",
-      diagnosis: "The verified model uses exact integers, while this TypeScript result is represented by an IEEE-754 number.",
-      resolution: "Use bigint, or prove that every input, intermediate, and result remains exact as a JavaScript number.",
-    };
-  }
-  if (category === "result-mismatch" && returnTy.kind === "real") {
-    return {
-      summary: "result differs because binary floating-point is not the exact real result",
-      diagnosis: "The verified model computes an exact rational, while JavaScript computes the nearest binary64 value.",
-      resolution: "Use an exact numeric representation, or change the specification to an explicit rounding/error contract.",
-    };
-  }
   if (category === "result-mismatch") return {
     summary: "JavaScript returned a different result from the verified model",
     diagnosis: "Whole-function differential execution found unequal observable results.",
-    resolution: "Make the runtime representation and operations agree with the verified model.",
+    resolution: "Inspect the source and generated model to locate the differing behavior for this input.",
   };
   if (category === "input-mutation") return {
     summary: "JavaScript mutates an input absent from the verified model",

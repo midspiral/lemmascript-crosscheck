@@ -97,7 +97,7 @@ Running [LemmaScript's `arraySum.ts`](https://github.com/midspiral/LemmaScript/b
 
 ```text
 arraySum — ISSUE FOUND
-Result differs because JavaScript integer arithmetic lost precision.
+JavaScript returned a different result from the verified model.
 
 Input
   arr         [9007199254740991, 2]
@@ -107,10 +107,10 @@ Result
   JavaScript  9007199254740992
 
 Cause
-  The verified model uses exact integers, while this TypeScript result is represented by an IEEE-754 number.
+  Whole-function differential execution found unequal observable results.
 
 Resolve
-  Use bigint, or prove that every input, intermediate, and result remains exact as a JavaScript number.
+  Inspect the source and generated model to locate the differing behavior for this input.
 
 Replay
   lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts --replay 9d3caf14a5
@@ -119,6 +119,8 @@ Evidence: replayed counterexample · Dafny 4.11.0 model
 ```
 
 Both array elements are representable JavaScript integers, but their sum is not. The verified model returns the exact mathematical integer while JavaScript rounds it.
+
+The report establishes a result mismatch; it does not infer the cause from the return type. Translation errors, including stale closure captures, can produce the same category of counterexample.
 
 ### Input rounding before the function starts
 

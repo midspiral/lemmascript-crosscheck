@@ -45,8 +45,9 @@ test("a numeric counterexample leads with exact expected and actual values", () 
       cases: 4, seed: 17,
       issue: {
         id: "1234567890", category: "result-mismatch",
-        summary: "result differs because JavaScript integer arithmetic lost precision",
-        diagnosis: "The model is exact.", resolution: "Use bigint.",
+        summary: "JavaScript returned a different result from the verified model",
+        diagnosis: "Whole-function differential execution found unequal observable results.",
+        resolution: "Inspect the source and generated model to locate the differing behavior for this input.",
         args: encode([[9_007_199_254_740_991n, 2n]]), paramNames: ["arr"],
         argDisplays: ["[9007199254740991, 2]"], modelResult: "9007199254740993",
         runtimeResult: encode(9_007_199_254_740_992), runtimeExact: "9007199254740992",
@@ -57,6 +58,7 @@ test("a numeric counterexample leads with exact expected and actual values", () 
   assert.match(text, /arraySum — ISSUE FOUND/);
   assert.match(text, /verified\s+9007199254740993/);
   assert.match(text, /JavaScript\s+9007199254740992/);
+  assert.match(text, /JavaScript returned a different result from the verified model/);
   assert.match(text, /Replay\n  lemmascript-crosscheck \/tmp\/arraySum\.ts --replay 1234567890/);
   assert.match(text, /Evidence: replayed counterexample · Dafny 4\.11\.0 model/);
 });

@@ -8,6 +8,7 @@ import { loadCase } from "../src/cases.js";
 import { decode, encode, type Encoded } from "../src/codec.js";
 import type { TypedFunction, TypedInfo } from "../src/ir.js";
 import { WorkerTimeoutError, type JsonLineRequestClient } from "../src/json-line-client.js";
+import { Rational } from "../src/rational.js";
 import type { AuditWorkers } from "../src/workers.js";
 
 const arrayFn: TypedFunction = {
@@ -115,6 +116,32 @@ function modelClient(): JsonLineRequestClient {
     modelValue: encode(0n),
     ...(message.runtimeResult === undefined ? {} : { equal: true, runtimeExact: "0" }),
   }));
+}
+
+for (const kind of ["int", "nat", "real"] as const) {
+  test(`${kind} result mismatches do not infer a numeric cause from the return type`, async () => {
+    const fn: TypedFunction = { ...arrayFn, params: [], returnTy: { kind } };
+    const typedInfo: TypedInfo = { ...info, functions: [fn] };
+    const model = client(async () => ({
+      status: "ok", modelDisplay: "2", modelValue: encode(kind === "real" ? new Rational(2n) : 2n),
+      equal: false, runtimeExact: "6",
+    }));
+    const runtime = client(async message => ({
+      status: "ok", result: encode(6), before: message.args, after: message.args, console: [],
+    }));
+    const workers: AuditWorkers = { model, runtime, close() {} };
+
+    const report = await auditTarget(fn, typedInfo, identity, workers, options);
+
+    assert.equal(report.conclusion, "issue");
+    assert.equal(report.issue?.category, "result-mismatch");
+    assert.equal(report.issue?.modelResult, "2");
+    assert.equal(decode(report.issue!.runtimeResult!), 6);
+    assert.doesNotMatch(
+      [report.issue!.summary, report.issue!.diagnosis, report.issue!.resolution].join(" "),
+      /precision|floating.point|bigint|round/i,
+    );
+  });
 }
 
 test("differential audits cross bounded forall preconditions and reach representability checks", async () => {
@@ -289,6 +316,7 @@ test("number input collisions expose an actual projected result mismatch", async
   const report = await auditTarget(searchFn, searchInfo, identity, workers, { ...options, cases: 10 });
 
   assert.equal(report.issue?.category, "input-representation-mismatch");
+  assert.match(report.issue!.summary, /input rounding/);
   assert.deepEqual(decode(report.issue!.args), [[9_007_199_254_740_992n], 9_007_199_254_740_993n]);
   assert.deepEqual(report.issue?.runtimeArgDisplays, ["[9007199254740992]", "9007199254740992"]);
   assert.equal(report.issue?.modelResult, "-1");
