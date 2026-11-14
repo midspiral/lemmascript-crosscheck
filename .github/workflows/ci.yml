@@ -77,8 +77,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: midspiral/LemmaScript
-          # Keep the known closure translation bugs reproducible.
-          ref: 406d36187bcf1ed792a427f0925c3699c7346d98
+          ref: main
           path: .test-lemmascript
 
       - name: Install dependencies

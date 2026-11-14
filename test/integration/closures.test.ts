@@ -61,7 +61,7 @@ test("mutable closure counterexamples are detected, reported, and replayed", asy
   assert.equal(contract.targets[0]?.issue?.postconditionClause, 1);
   assert.equal(decode(contract.targets[0]!.issue!.runtimeResult!), 6);
 
-  // The pinned compiler cannot emit this void helper call. It must remain
+  // This void helper call currently produces invalid Dafny. It must remain
   // visibly NOT CHECKED rather than turning missing coverage into success.
   const viaCall = path.join(root, "closure-via-call.ts");
   await copyFile(new URL("../fixtures/closure-via-call.ts", import.meta.url), viaCall);

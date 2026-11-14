@@ -1,5 +1,5 @@
-// Reproductions from midspiral/LemmaScript#267. The false postconditions
-// verify under the compiler revision pinned by the integration CI job.
+// Reproductions from midspiral/LemmaScript#267. The mutable cases assert stale
+// captured values instead of JavaScript's actual results (6, 2, and 1).
 
 //@ ensures \result === 2
 export function late(): number {

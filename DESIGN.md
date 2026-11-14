@@ -414,7 +414,7 @@ The closure regressions in `test/fixtures/` run through real LemmaScript verific
 LEMMASCRIPT=/path/to/LemmaScript npm run test:integration
 ```
 
-CI pins LemmaScript to `406d36187bcf1ed792a427f0925c3699c7346d98` and Dafny to 4.11.0 to preserve the known translation bugs from [LemmaScript#267](https://github.com/midspiral/LemmaScript/issues/267). The tests detect reassignment, array mutation, and alias mutation after closure creation, check an unchanged capture as a positive control, and keep an unsupported helper call visibly `NOT CHECKED`. Updating the compiler pin requires reviewing these expectations.
+CI tests against LemmaScript `main` with Dafny 4.11.0. The current expectations cover the translation bugs from [LemmaScript#267](https://github.com/midspiral/LemmaScript/issues/267): reassignment, array mutation, and alias mutation after closure creation. An unchanged capture is a positive control, and an unsupported helper call remains visibly `NOT CHECKED`. When `main` fixes one of these behaviors, review and update the expected outcome.
 
 Additional end-to-end examples live in the adjacent LemmaScript repository. The important behaviors are:
 
