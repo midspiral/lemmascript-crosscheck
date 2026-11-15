@@ -42,6 +42,17 @@ test("fatal JSON output remains a complete v1 target report", () => {
   }]);
 });
 
+test("manifest verification flags accept leading dashes in an inline value", () => {
+  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const result = spawnSync(process.execPath, [
+    "--import", "tsx", cliPath, "/missing-crosscheck-source.ts", "--json",
+    "--time-limit=500", "--extra-flags=--isolate-assertions --cores 1",
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 2);
+  assert.equal(JSON.parse(result.stdout).schema, "lemmascript-crosscheck.report/v1");
+  assert.doesNotMatch(result.stderr, /requires a value/);
+});
+
 test("legacy replay cases fail as structured JSON instead of an unhandled rejection", async t => {
   const root = await mkdtemp(path.join(tmpdir(), "lemmascript-crosscheck-cli-cases-"));
   const id = "0123456789";

@@ -1,0 +1,92 @@
+name: Case-study audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.corpus.outputs.matrix }}
+      compiler: ${{ steps.corpus.outputs.compiler }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - uses: actions/checkout@v6
+        with:
+          repository: midspiral/LemmaScript
+          ref: main
+          path: .test-lemmascript
+      - name: Read the primary case studies from LemmaScript CI
+        id: corpus
+        run: |
+          matrix=$(node --import tsx scripts/case-studies.ts --lemmascript .test-lemmascript --list)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "compiler=$(git -C .test-lemmascript rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  audit:
+    needs: corpus
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.corpus.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/checkout@v6
+        with:
+          repository: midspiral/LemmaScript
+          ref: ${{ needs.corpus.outputs.compiler }}
+          path: .test-lemmascript
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.branch }}
+          path: .case-studies/${{ matrix.name }}
+      - run: npm ci
+      - name: Install LemmaScript dependencies
+        working-directory: .test-lemmascript
+        run: npm ci
+      - uses: ./.test-lemmascript/.github/actions/setup-dafny
+      # This is a coverage audit, not a zero-findings gate. Crosscheck's normal
+      # 0/1/2 exits and all NOT CHECKED reasons are retained in the artifacts.
+      # Runner errors (missing manifest, malformed report, deadline) still fail.
+      - name: Audit every manifest source, including slow entries
+        env:
+          STUDY: ${{ matrix.name }}
+        run: >-
+          npm run case-studies --
+          --workspace .case-studies --lemmascript .test-lemmascript
+          --repo "$STUDY" --report-only
+      - name: Publish coverage summary
+        if: always()
+        shell: bash
+        run: |
+          for summary in reports/case-studies/run-*/summary.md; do
+            if [ -f "$summary" ]; then cat "$summary" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+      - name: Save reports and replay cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosscheck-${{ matrix.name }}
+          path: |
+            reports/case-studies/run-*/summary.*
+            reports/case-studies/run-*/stats.json
+            reports/case-studies/run-*/case-studies.tex
+            reports/case-studies/run-*/reports/
+            reports/case-studies/run-*/cases/
+          if-no-files-found: error
