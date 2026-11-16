@@ -28,6 +28,11 @@ export class UnsupportedBackendError extends Error {
   }
 }
 
+export interface VerificationOptions {
+  timeLimit?: number;
+  extraFlags?: string;
+}
+
 function lscInvocation(): Invocation {
   const checkout = process.env.LEMMASCRIPT;
   if (checkout) {
@@ -64,7 +69,7 @@ export function compatibleDafnyVersion(version: string): boolean {
   return !!match && Number(match[1]) === 4 && Number(match[2]) === 11;
 }
 
-export async function verifyAndInspect(sourcePath: string, timeoutMs = 300_000): Promise<VerifiedInput> {
+export async function verifyAndInspect(sourcePath: string, timeoutMs = 300_000, options: VerificationOptions = {}): Promise<VerifiedInput> {
   const source = path.resolve(sourcePath);
   await access(source);
   const sourceHashBefore = await sha256(source);
@@ -92,7 +97,10 @@ export async function verifyAndInspect(sourcePath: string, timeoutMs = 300_000):
     throw new Error(`Dafny ${dafnyVersion || "unknown"} is unsupported; this build requires 4.11.x`);
   }
 
-  const checked = await runLsc(["check", "--backend=dafny", source], timeoutMs);
+  const checkArgs = ["check", "--backend=dafny", source];
+  if (options.timeLimit !== undefined) checkArgs.push(`--time-limit=${options.timeLimit}`);
+  if (options.extraFlags !== undefined) checkArgs.push(`--extra-flags=${options.extraFlags}`);
+  const checked = await runLsc(checkArgs, timeoutMs);
   const sourceHashAfter = await sha256(source);
   if (sourceHashBefore !== sourceHashAfter) throw new Error("source changed while LemmaScript verification was running");
 

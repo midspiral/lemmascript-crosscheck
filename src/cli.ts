@@ -18,6 +18,8 @@ interface CliOptions {
   seed: number;
   timeoutMs: number;
   verifyTimeoutMs: number;
+  timeLimit?: number;
+  extraFlags?: string;
   details: boolean;
   json: boolean;
   entries: Map<string, string>;
@@ -104,6 +106,10 @@ async function main(): Promise<void> {
       seed: parsed.seed,
       timeoutMs: parsed.timeoutMs,
       verifyTimeoutMs: parsed.verifyTimeoutMs,
+      verification: {
+        ...(parsed.timeLimit === undefined ? {} : { timeLimit: parsed.timeLimit }),
+        ...(parsed.extraFlags === undefined ? {} : { extraFlags: parsed.extraFlags }),
+      },
       entries: parsed.entries,
       checks: parsed.checks,
       saveCases: true,
@@ -168,7 +174,7 @@ function parseArgs(args: string[]): CliOptions {
     }
     const [name, inline] = splitFlag(arg);
     const value = inline ?? args[++index];
-    if (value === undefined || value.startsWith("--")) throw new Error(`${name} requires a value`);
+    if (value === undefined || (inline === undefined && value.startsWith("--"))) throw new Error(`${name} requires a value`);
     if (name === "--runtime") result.runtime = value;
     else if (name === "--only") result.only = value;
     else if (name === "--replay") result.replayId = value;
@@ -176,6 +182,8 @@ function parseArgs(args: string[]): CliOptions {
     else if (name === "--seed") result.seed = integer(name, value);
     else if (name === "--timeout") result.timeoutMs = positiveInteger(name, value);
     else if (name === "--verify-timeout") result.verifyTimeoutMs = positiveInteger(name, value);
+    else if (name === "--time-limit") result.timeLimit = positiveInteger(name, value);
+    else if (name === "--extra-flags") result.extraFlags = value;
     else if (name === "--checks") result.checks = parseChecks(value);
     else if (name === "--entry") {
       const separator = value.indexOf("=");
@@ -217,7 +225,7 @@ function integer(name: string, value: string): number {
 }
 
 function help(): string {
-  return `lemmascript-crosscheck ${VERSION}\n\nUsage:\n  lemmascript-crosscheck <source.ts> [options]\n\nOptions:\n  --only <name>          Check one exported verified function\n  --runtime <module>     Execute a deployed module instead of the source\n  --entry A=B            Map formal target A to runtime export B\n  --cases <count>        Accepted executions per target (default: 100)\n  --checks <list>        contract, differential, or both (default: differential)\n  --seed <integer>       Deterministic generation seed (default: 17)\n  --timeout <ms>         Per-call worker deadline (default: 2000)\n  --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)\n  --replay <id>          Replay a saved counterexample\n  --details              Expand every target in a multi-target file\n  --json                 Emit the stable machine report\n  --help                  Show this help\n  --version               Show the version\n\nDevelopment checkout:\n  LEMMASCRIPT=../LemmaScript lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts\n`;
+  return `lemmascript-crosscheck ${VERSION}\n\nUsage:\n  lemmascript-crosscheck <source.ts> [options]\n\nOptions:\n  --only <name>          Check one exported verified function\n  --runtime <module>     Execute a deployed module instead of the source\n  --entry A=B            Map formal target A to runtime export B\n  --cases <count>        Accepted executions per target (default: 100)\n  --checks <list>        contract, differential, or both (default: differential)\n  --seed <integer>       Deterministic generation seed (default: 17)\n  --timeout <ms>         Per-call worker deadline (default: 2000)\n  --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)\n  --time-limit <sec>     Dafny verification time limit per assertion\n  --extra-flags <flags>  Additional Dafny verification flags (use = for leading --)\n  --replay <id>          Replay a saved counterexample\n  --details              Expand every target in a multi-target file\n  --json                 Emit the stable machine report\n  --help                  Show this help\n  --version               Show the version\n\nDevelopment checkout:\n  LEMMASCRIPT=../LemmaScript lemmascript-crosscheck ../LemmaScript/examples/arraySum.ts\n`;
 }
 
 void main();

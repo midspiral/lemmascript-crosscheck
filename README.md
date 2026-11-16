@@ -248,6 +248,8 @@ lemmascript-crosscheck <source.ts> [options]
   --seed <integer>       Deterministic generation seed (default: 17)
   --timeout <ms>         Per-call worker deadline (default: 2000)
   --verify-timeout <ms>  LemmaScript/Dafny deadline (default: 300000)
+  --time-limit <sec>     Dafny verification time limit per assertion
+  --extra-flags <flags>  Additional Dafny verification flags (use = for leading --)
   --replay <id>          Replay a saved counterexample
   --details              Expand every target in a multi-target file
   --json                 Emit the stable machine report
@@ -358,6 +360,68 @@ and evaluates the runtime `ensures`. It records either a false postcondition or
 the first precondition-valid value outside the verified parameter domain.
 
 ## Development
+
+### Auditing the paper's case studies
+
+With this repository, `LemmaScript`, and the case-study checkouts as siblings:
+
+```sh
+npm ci
+npm run case-studies -- --jobs 4 --paper ../lemmascript-paper
+```
+
+The runner reads the **primary Dafny case-study matrix in LemmaScript's CI**
+(`main` or `lemmascript`, one checkout per `*-lemmascript` project), then audits
+**every source in each project's `LemmaScript-files.txt`**. This is the paper's
+26-project corpus; alternative integration branches and the extra non-paper CI
+project are excluded. `--paper` checks that the repository list agrees with
+`case-studies.json`; it is optional and is not needed by public CI.
+
+Manifest time limits and extra Dafny flags are forwarded to verification,
+including entries above 60 seconds that ordinary LemmaScript CI only generates.
+The default is 40 samples per target, seed 17, and differential checking.
+Use `--checks contract,differential` for both modes (a contract finding takes
+precedence), `--repo eventab-lemmascript` for one study, or `--list` to inspect
+the selected repositories. `--workspace` and `--lemmascript` override the paths.
+
+Each run copies current tracked and untracked, non-ignored files before invoking
+Crosscheck, so regeneration does not change the original proof files. Installed
+`node_modules` directories are reused; the runner does not install project
+dependencies. A missing runtime dependency, unsupported target, stale proof,
+or unverifiable/abstract model stays visible as `NOT CHECKED` with its reason.
+Only exported synchronous targets supported by Crosscheck can be compared;
+this does not execute Lean proofs or standalone extra-proof scripts.
+
+Results live in a fresh `reports/case-studies/run-*` directory: `summary.md`,
+`summary.json`, `stats.json`, a paper-ready `case-studies.tex` longtable (booktabs),
+per-file JSON/stdout/stderr, saved replay cases, and source copies. The tables
+separate targets that could not be checked from files that failed before target
+reporting. Coverage percentages exclude the unknown targets in failed files.
+`--paper` also supplies the paper's display names for the tables.
+The JSON includes compiler and study revisions, local changes, options, and the
+exact per-file commands. To replay locally, set `LEMMASCRIPT_CROSSCHECK_CACHE` to
+that run's `cases` directory and add `--replay ID` to the report's original
+command (retaining its verification flags and copied source path).
+Keep the source copies while using the saved replays.
+
+Rebuild the tables and statistics from a saved run without rerunning audits:
+
+```sh
+npm run case-studies -- --summarize reports/case-studies/run-XXXXXX --paper ../lemmascript-paper
+```
+
+The normal exit codes remain 0/1/2; every source is attempted before returning.
+`--report-only` allows findings and `NOT CHECKED` while still failing on runner
+errors such as a missing checkout/manifest, invalid report, or file deadline.
+It does **not** mean the corpus passed. The manually dispatched
+[case-study workflow](.github/workflows/case-studies.yml) uses this mode, one job
+per repository, and uploads the reports and replay cases. CI uses fresh primary
+branch checkouts and no case-study dependency installs; restore the recorded
+revision and pass its source path to `--replay` when using downloaded witnesses.
+This is a reporting workflow, not a regression gate: automatic gating should
+compare expected findings and coverage against a reviewed baseline first.
+
+### Checks
 
 ```sh
 npm test

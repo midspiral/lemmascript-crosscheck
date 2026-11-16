@@ -44,6 +44,7 @@
     "test:integration": "npm run build && node --import tsx --test test/integration/*.test.ts",
     "examples:check": "npm run build && node examples/run.mjs",
     "examples:update": "npm run build && node examples/run.mjs --update",
+    "case-studies": "npm run build && node dist/scripts/case-studies.js",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {

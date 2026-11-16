@@ -27,7 +27,7 @@ import {
   satisfiesRuntimePreconditions,
 } from "./runtime-spec.js";
 import { satisfiesPreconditions, SpecUnsupported } from "./spec.js";
-import { hashFile, verifyAndInspect } from "./toolchain.js";
+import { hashFile, verifyAndInspect, type VerificationOptions } from "./toolchain.js";
 import { startWorkers, type AuditWorkers } from "./workers.js";
 
 export interface AuditOptions {
@@ -35,6 +35,7 @@ export interface AuditOptions {
   seed: number;
   timeoutMs: number;
   verifyTimeoutMs: number;
+  verification?: VerificationOptions;
   only?: string;
   runtime?: string;
   entries: ReadonlyMap<string, string>;
@@ -104,7 +105,7 @@ export interface AuditIdentity {
 
 export async function auditFile(source: string, options: AuditOptions): Promise<AuditReport> {
   options.progress?.("verifying with LemmaScript");
-  const verified = await verifyAndInspect(source, options.verifyTimeoutMs);
+  const verified = await verifyAndInspect(source, options.verifyTimeoutMs, options.verification);
   if (options.replay && verified.sourceHash !== options.replay.sourceSha256) {
     throw new Error(`source changed since replay ${options.replay.id} was recorded`);
   }
